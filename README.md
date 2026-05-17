@@ -1,4 +1,4 @@
-# 3D-GS-Viewer
+# SplatScope
 Minimal 3D Gaussian Splatting Viewer
 
 A CPU-based implementation of a 3D Gaussian Splatting viwer, building
