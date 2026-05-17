@@ -1,0 +1,12 @@
+build/
+.cache/
+.vscode/
+compile_commands.json
+external/tinply
+.clang-format
+*.o
+*.a
+*.so
+*.out
+
+.DS_Store
