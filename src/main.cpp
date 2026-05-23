@@ -1,16 +1,25 @@
+#include <exception>
 #include <iostream>
 
+#include "scene/ply_loader.h"
 #include "tinyply.h"
 
 using namespace tinyply;
 
-int main() {
-    std::cout << " test \n";
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << "<path/to/pretrained_gaussin.py\n";
+        return 1;
+    }
 
-    std::string filepath =
-        "/home/user1/work/learn/3dgs/pretrainedModelsGaussian/counter/point_cloud/iteration_30000/"
-        "point_cloud.ply";
-    std::cout << "Reading file : " << filepath << std::endl;
+    std::string filepath = argv[1];
+
+    try {
+        auto gaussian = scene::load(filepath);
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal: " << e.what() << "\n";
+        return 1;
+    }
 
     return 0;
 }
