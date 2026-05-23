@@ -1,154 +1,123 @@
 #include "scene/ply_loader.h"
+
+#include <iostream>
 #include <stdexcept>
-#include <string_view>
 #include <vector>
+
 #include "Eigen/Core"
 #include "Eigen/Geometry"
+#include "example-utils.hpp"
 #include "scene/gaussian_cloud.h"
 #include "tinyply.h"
-#include "example-utils.hpp"
-#include <iostream>
 
 using namespace tinyply;
 
-std::vector<Eigen::Vector3f> extractVec3Data(const std::shared_ptr<PlyData>& plyData) {
+std::vector<Eigen::Vector3f> extract_vec3_data(const tinyply::PlyData& data) {
+    if (data.t != tinyply::Type::FLOAT32) {
+        throw std::runtime_error("Expected FLOAT32 vec3 attribute in PLY");
+    }
     std::vector<Eigen::Vector3f> result;
 
-    if (!plyData || plyData->count == 0) return result;
+    result.reserve(data.count);
 
-    result.reserve(plyData->count);
-
-    if (plyData->t == tinyply::Type::FLOAT32) {
-        const float* data = reinterpret_cast<const float*>(plyData->buffer.get());
-        for (size_t i = 0; i < plyData->count; i++) {
-            result.emplace_back(data[i * 3], data[i * 3 + 1], data[i * 3 + 2]);
-        }
+    const float* raw =
+        reinterpret_cast<const float*>(const_cast<tinyply::Buffer&>(data.buffer).get());
+    for (size_t i = 0; i < data.count; i++) {
+        result.emplace_back(raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]);
     }
 
     return result;
 }
 
-std::vector<float> extractFloatData(const std::shared_ptr<PlyData>& plyData) {
-        std::vector<float> result;
-        if (!plyData || plyData->count == 0) return result;
-        
-        result.reserve(plyData->count);
-        
-        if (plyData->t == tinyply::Type::FLOAT32) {
-            const float* data = reinterpret_cast<const float*>(plyData->buffer.get());
-            result.assign(data, data + plyData->count);
-        } else if (plyData->t == tinyply::Type::FLOAT64) {
-            const double* data = reinterpret_cast<const double*>(plyData->buffer.get());
-            for (size_t i = 0; i < plyData->count; i++) {
-                result.push_back(static_cast<float>(data[i]));
-            }
+std::vector<float> extract_float_data(const tinyply::PlyData& data) {
+    std::vector<float> result;
+
+    result.reserve(data.count);
+
+    if (data.t == tinyply::Type::FLOAT32) {
+        const float* raw =
+            reinterpret_cast<const float*>(const_cast<tinyply::Buffer&>(data.buffer).get());
+        result.assign(raw, raw + data.count);
+    } else if (data.t == tinyply::Type::FLOAT64) {
+        const double* raw =
+            reinterpret_cast<const double*>(const_cast<tinyply::Buffer&>(data.buffer).get());
+        for (size_t i = 0; i < data.count; i++) {
+            result.push_back(static_cast<float>(raw[i]));
         }
-        
-        return result;
+    } else {
+        throw std::runtime_error("Expected FLOAT32 OR FLOAT64 scaler attribute in PLY");
+    }
+
+    return result;
 }
 
+std::vector<Eigen::Quaternionf> extract_quaternion_data(const tinyply::PlyData& data) {
+    if (data.t != tinyply::Type::FLOAT32) {
+        throw std::runtime_error("Expected FLOAT32 quat attribute in PLY");
+    }
 
-std::vector<Eigen::Quaternionf> extractQuaternionData(const std::shared_ptr<PlyData>& plyData) {
     std::vector<Eigen::Quaternionf> result;
 
-    if (!plyData || plyData->count == 0) return result;
+    result.reserve(data.count);
 
-    result.reserve(plyData->count);
-
-    if (plyData->t == tinyply::Type::FLOAT32) {
-        const float* data = reinterpret_cast<const float*>(plyData->buffer.get());
-        for (size_t i = 0; i < plyData->count; i++) {
-            result.emplace_back(
-                data[i * 4],     // x
-                data[i * 4 + 1], // y
-                data[i * 4 + 2], // z
-                data[i * 4 + 3]  // w
-            );
-        }
+    const float* raw =
+        reinterpret_cast<const float*>(const_cast<tinyply::Buffer&>(data.buffer).get());
+    for (size_t i = 0; i < data.count; i++) {
+        result.emplace_back(raw[i * 4],      // w
+                            raw[i * 4 + 1],  // x
+                            raw[i * 4 + 2],  // y
+                            raw[i * 4 + 3]   // z
+        );
+        result.back().normalize();
     }
 
     return result;
 }
-
+namespace scene {
 GaussianCloud load(const std::string& file_path) {
-
     const bool preload_into_memory = true;
 
-
-    
     std::unique_ptr<std::istream> file_stream;
     std::vector<uint8_t> byte_buffer;
 
-    try
-    {
-        // For most files < 1gb, pre-loading the entire file upfront and wrapping it into a 
-        // stream is a net win for parsing speed, about 40% faster. 
-        if (preload_into_memory)
-        {
-            byte_buffer = read_file_binary(file_path);
-            file_stream.reset(new memory_stream((char*)byte_buffer.data(), byte_buffer.size()));
-        }
-        else
-        {
-            file_stream.reset(new std::ifstream(file_path, std::ios::binary));
-        }
-
-        if (!file_stream || file_stream->fail()) throw std::runtime_error("file_stream failed to open " + file_path);
-
-        file_stream->seekg(0, std::ios::end);
-        const float size_mb = file_stream->tellg() * float(1e-6);
-        file_stream->seekg(0, std::ios::beg);
-
-        PlyFile file;
-        file.parse_header(*file_stream);
-
-        // std::cout << "\t[ply_header] Type: " << (file.is_binary_file() ? "binary" : "ascii") << std::endl;
-        // for (const auto & c : file.get_comments()) std::cout << "\t[ply_header] Comment: " << c << std::endl;
-        // for (const auto & c : file.get_info()) std::cout << "\t[ply_header] Info: " << c << std::endl;
-
-        GaussianCloud guassian;
-        for (const auto & e : file.get_elements()) {
-            if (e.name == "vertex") {
-                std::cout << "\n Vertex Element (" << e.size << " points)" << std::endl;
-            }
-        }
-
-        std::vector<float> positions_x, positions_y, positions_z;
-        std::vector<float> colors_0, colors_1, colors_2;
-        std::vector<float> opacitites;
-        std::vector<float> scales_0, scales_1, scales_2;
-        std::vector<float> rotations_0, rotations_1, rotations_2, rotations_3;
-
-        std::vector<std::shared_ptr<PlyData>> plyData;
-        
-        try {
-            plyData.push_back(file.request_properties_from_element("vertex", {"x", "y", "z"}));
-            plyData.push_back(file.request_properties_from_element("vertex", {"f_dc_0", "f_dc_1", "f_dc_2"}));
-            plyData.push_back(file.request_properties_from_element("vertex", {"opacity"}));
-            plyData.push_back(file.request_properties_from_element("vertex", {"scale_0", "scale_1", "scale_2"}));
-            plyData.push_back(file.request_properties_from_element("vertex", {"rot_0", "rot_1", "rot_2", "rot_3"}));
-            
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: " << e.what() << std::endl;
-        }
-
-        file.read(*file_stream);
-
-        if (plyData.size() >= 0) {
-            guassian.mean = extractVec3Data(plyData[0]);
-            guassian.color = extractVec3Data(plyData[1]);
-            guassian.opacity = extractFloatData(plyData[2]);
-            guassian.scale = extractVec3Data(plyData[3]);
-            guassian.rotation = extractQuaternionData(plyData[4]);
-        }
-
-        return guassian;
+    if (preload_into_memory) {
+        byte_buffer = read_file_binary(file_path);
+        file_stream.reset(new memory_stream((char*)byte_buffer.data(), byte_buffer.size()));
+    } else {
+        file_stream.reset(new std::ifstream(file_path, std::ios::binary));
     }
-    catch (const std::exception & e)
-    {
-        std::cerr << "Caught tinyply exception: " << e.what() << std::endl;
-        throw std::runtime_error("PLY missing required attribute: " + std::string(e.what()));
-    }
-    
 
+    if (!file_stream || file_stream->fail())
+        throw std::runtime_error("file_stream failed to open " + file_path);
+
+    file_stream->seekg(0, std::ios::end);
+    file_stream->seekg(0, std::ios::beg);
+
+    PlyFile file;
+    file.parse_header(*file_stream);
+
+    auto poisitions = file.request_properties_from_element("vertex", {"x", "y", "z"});
+    auto colors = file.request_properties_from_element("vertex", {"f_dc_0", "f_dc_1", "f_dc_2"});
+    auto opacities = file.request_properties_from_element("vertex", {"opacity"});
+    auto scales = file.request_properties_from_element("vertex", {"scale_0", "scale_1", "scale_2"});
+    auto rotations =
+        file.request_properties_from_element("vertex", {"rot_0", "rot_1", "rot_2", "rot_3"});
+
+    file.read(*file_stream);
+
+    GaussianCloud cloud;
+    cloud.mean = extract_vec3_data(*poisitions);
+    cloud.color = extract_vec3_data(*colors);
+    cloud.opacity = extract_float_data(*opacities);
+    cloud.scale = extract_vec3_data(*scales);
+    cloud.rotation = extract_quaternion_data(*rotations);
+
+    // TODO
+    // decode gaussian for 3dgs scale.exp, opacity (0-1)
+    // handle nan values
+    std::cout << "Loaded " << cloud.mean.size() << " gaussians from " << file_path << "\n";
+
+    return cloud;
 }
+
+}  // namespace scene
