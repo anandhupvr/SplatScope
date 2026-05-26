@@ -12,6 +12,18 @@
 
 using namespace tinyply;
 
+struct TempGaussian {
+    Eigen::Vector3f position;
+    Eigen::Vector3f scale;
+    float opacity;
+    Eigen::Quaternionf rotation;
+    Eigen::Vector3f color;
+};
+
+double sigmoid(float x) {
+    return 1.0 / (1.0 + std::exp(-x));
+}
+
 std::vector<Eigen::Vector3f> extract_vec3_data(const tinyply::PlyData& data) {
     if (data.t != tinyply::Type::FLOAT32) {
         throw std::runtime_error("Expected FLOAT32 vec3 attribute in PLY");
@@ -73,6 +85,21 @@ std::vector<Eigen::Quaternionf> extract_quaternion_data(const tinyply::PlyData& 
 
     return result;
 }
+
+void apply_3d_gs_decoding(GaussianCloud& cloud) {
+    // scales are in log space , must activate with exp
+    for (auto& s : cloud.scale) {
+        s = s.array().exp();
+    }
+
+    // opacities store in pre-sigmod so, apply sigmoid
+    for (auto& o : cloud.opacity) {
+        o = sigmoid(o);
+    }
+
+    // rotations are already normalize in `extract_quaternion_data`
+}
+
 namespace scene {
 GaussianCloud load(const std::string& file_path) {
     const bool preload_into_memory = true;
@@ -105,19 +132,29 @@ GaussianCloud load(const std::string& file_path) {
 
     file.read(*file_stream);
 
-    GaussianCloud cloud;
-    cloud.mean = extract_vec3_data(*poisitions);
-    cloud.color = extract_vec3_data(*colors);
-    cloud.opacity = extract_float_data(*opacities);
-    cloud.scale = extract_vec3_data(*scales);
-    cloud.rotation = extract_quaternion_data(*rotations);
+    GaussianCloud raw_gaussian;
+    raw_gaussian.mean = extract_vec3_data(*poisitions);
+    raw_gaussian.color = extract_vec3_data(*colors);
+    raw_gaussian.opacity = extract_float_data(*opacities);
+    raw_gaussian.scale = extract_vec3_data(*scales);
+    raw_gaussian.rotation = extract_quaternion_data(*rotations);
+
+    auto raw_size = raw_gaussian.size();
+
+    size_t skipped = 0;
 
     // TODO
-    // decode gaussian for 3dgs scale.exp, opacity (0-1)
     // handle nan values
-    std::cout << "Loaded " << cloud.mean.size() << " gaussians from " << file_path << "\n";
+    GaussianCloud decoded_cloud;
+    for (int i = 0; i < raw_size; i++) {
+        // validate each gaussian
+        // if not valid skip it
+    }
 
-    return cloud;
+    apply_3d_gs_decoding(decoded_cloud);
+    std::cout << "Loaded " << decoded_cloud.mean.size() << " gaussians from " << file_path << "\n";
+
+    return decoded_cloud;
 }
 
 }  // namespace scene
