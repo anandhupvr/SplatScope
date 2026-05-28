@@ -1,10 +1,11 @@
 #pragma once
 
-#include <Eigen/Dense>
 #include <vector>
 
 #include "Eigen/Core"
 #include "Eigen/Geometry"
+
+#include <Eigen/Dense>
 
 struct GaussianCloud {
     std::vector<Eigen::Vector3f> mean;

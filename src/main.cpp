@@ -1,8 +1,9 @@
 #include <exception>
 #include <iostream>
 
-#include "scene/ply_loader.h"
 #include "tinyply.h"
+
+#include "scene/ply_loader.h"
 
 using namespace tinyply;
 

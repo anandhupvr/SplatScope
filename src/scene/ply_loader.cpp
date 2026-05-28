@@ -1,5 +1,6 @@
 #include "scene/ply_loader.h"
 
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -7,20 +8,13 @@
 #include "Eigen/Core"
 #include "Eigen/Geometry"
 #include "example-utils.hpp"
-#include "scene/gaussian_cloud.h"
 #include "tinyply.h"
 
-using namespace tinyply;
+#include "scene/gaussian_cloud.h"
 
-struct TempGaussian {
-    Eigen::Vector3f position;
-    Eigen::Vector3f scale;
-    float opacity;
-    Eigen::Quaternionf rotation;
-    Eigen::Vector3f color;
-};
+namespace {
 
-double sigmoid(float x) {
+inline float sigmoid(float x) {
     return 1.0 / (1.0 + std::exp(-x));
 }
 
@@ -100,6 +94,36 @@ void apply_3d_gs_decoding(GaussianCloud& cloud) {
     // rotations are already normalize in `extract_quaternion_data`
 }
 
+inline bool is_valid_at(const GaussianCloud& cloud, std::size_t i) {
+    return cloud.mean[i].allFinite() && cloud.scale[i].allFinite() && cloud.color[i].allFinite() &&
+           cloud.rotation[i].coeffs().allFinite() && std::isfinite(cloud.opacity[i]) &&
+           cloud.scale[i].minCoeff() > 0.0f && cloud.rotation[i].norm() > 1e-6f;
+}
+GaussianCloud filter_valid(const GaussianCloud& src, std::size_t& skipped_out) {
+    GaussianCloud out;
+    const std::size_t n = src.size();
+    out.mean.reserve(n);
+    out.scale.reserve(n);
+    out.color.reserve(n);
+    out.opacity.reserve(n);
+    out.rotation.reserve(n);
+
+    skipped_out = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        if (!is_valid_at(src, i)) {
+            ++skipped_out;
+            continue;
+        }
+        out.mean.push_back(src.mean[i]);
+        out.scale.push_back(src.scale[i]);
+        out.color.push_back(src.color[i]);
+        out.opacity.push_back(src.opacity[i]);
+        out.rotation.push_back(src.rotation[i]);
+    }
+    return out;
+}
+}  // namespace
+
 namespace scene {
 GaussianCloud load(const std::string& file_path) {
     const bool preload_into_memory = true;
@@ -117,10 +141,10 @@ GaussianCloud load(const std::string& file_path) {
     if (!file_stream || file_stream->fail())
         throw std::runtime_error("file_stream failed to open " + file_path);
 
-    file_stream->seekg(0, std::ios::end);
-    file_stream->seekg(0, std::ios::beg);
+    // file_stream->seekg(0, std::ios::end);
+    // file_stream->seekg(0, std::ios::beg);
 
-    PlyFile file;
+    tinyply::PlyFile file;
     file.parse_header(*file_stream);
 
     auto poisitions = file.request_properties_from_element("vertex", {"x", "y", "z"});
@@ -140,21 +164,15 @@ GaussianCloud load(const std::string& file_path) {
     raw_gaussian.rotation = extract_quaternion_data(*rotations);
 
     auto raw_size = raw_gaussian.size();
+    apply_3d_gs_decoding(raw_gaussian);
 
     size_t skipped = 0;
 
-    // TODO
-    // handle nan values
-    GaussianCloud decoded_cloud;
-    for (int i = 0; i < raw_size; i++) {
-        // validate each gaussian
-        // if not valid skip it
-    }
+    auto gaussian_cloud = filter_valid(raw_gaussian, skipped);
 
-    apply_3d_gs_decoding(decoded_cloud);
-    std::cout << "Loaded " << decoded_cloud.mean.size() << " gaussians from " << file_path << "\n";
+    std::cout << "Loaded " << gaussian_cloud.size() << " gaussians (skipped " << skipped << ")\n";
 
-    return decoded_cloud;
+    return gaussian_cloud;
 }
 
 }  // namespace scene
