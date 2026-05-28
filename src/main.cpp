@@ -5,8 +5,6 @@
 
 #include "scene/ply_loader.h"
 
-using namespace tinyply;
-
 int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << "<path/to/pretrained_gaussin.py\n";

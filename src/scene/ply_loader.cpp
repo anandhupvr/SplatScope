@@ -141,9 +141,6 @@ GaussianCloud load(const std::string& file_path) {
     if (!file_stream || file_stream->fail())
         throw std::runtime_error("file_stream failed to open " + file_path);
 
-    // file_stream->seekg(0, std::ios::end);
-    // file_stream->seekg(0, std::ios::beg);
-
     tinyply::PlyFile file;
     file.parse_header(*file_stream);
 
