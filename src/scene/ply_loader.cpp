@@ -7,7 +7,7 @@
 
 #include "Eigen/Core"
 #include "Eigen/Geometry"
-#include "example-utils.hpp"
+#include "example-utils.hpp"  // later replace with own
 #include "tinyply.h"
 
 #include "scene/gaussian_cloud.h"
