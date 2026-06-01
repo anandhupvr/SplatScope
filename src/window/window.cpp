@@ -13,9 +13,9 @@ Window::Window(int width, int height, const char* title) : width_(width), height
 
     glfwMakeContextCurrent(glfw_window_);
 
-    int fb_w, fb_h;
-    glfwGetFramebufferSize(glfw_window_, &fb_w, &fb_h);
-    glViewport(0, 0, fb_w, fb_h);
+    // int fb_w, fb_h;
+    // glfwGetFramebufferSize(glfw_window_, &fb_w, &fb_h);
+    // glViewport(0, 0, fb_w, fb_h);
 
     glfwSetWindowUserPointer(glfw_window_, this);
     glfwSetKeyCallback(glfw_window_, [](GLFWwindow* w, int key, int, int action, int) {

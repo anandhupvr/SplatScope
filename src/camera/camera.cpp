@@ -87,14 +87,17 @@ Eigen::Matrix4f Camera::view_matrix() const {
     Eigen::Vector3f center = target_;
     // Eigen::Vector3f up = kWorldUp;
 
-    Eigen::Vector3f forward = (center - eye).normalized();                               // forward
-    Eigen::Vector3f right = forward.cross(Eigen::Vector3f(0.f, 1.f, 0.f)).normalized();  // right
-    Eigen::Vector3f up = right.cross(forward).normalized();                              // up
+    Eigen::Vector3f forward = (center - eye).normalized();  // forward
+    // Eigen::Vector3f right = forward.cross(kWorldUp).normalized();  // right
+    // this is to match the up direction with colabmap not using opengl convension (kWorldUp)
+    Eigen::Vector3f right =
+        forward.cross(Eigen::Vector3f(0.0f, -1.0f, 0.0f)).normalized();  // right
+    Eigen::Vector3f up = right.cross(forward);                           // up
 
     Eigen::Matrix4f view = Eigen::Matrix4f::Identity();
     view.block<1, 3>(0, 0) = right.transpose();
     view.block<1, 3>(1, 0) = up.transpose();
-    view.block<1, 3>(2, 0) = -forward.transpose();
+    view.block<1, 3>(2, 0) = forward.transpose();
     view.block<3, 1>(0, 3) = -view.block<3, 3>(0, 0) * eye;
     return view;
 }
