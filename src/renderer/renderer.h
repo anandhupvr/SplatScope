@@ -10,5 +10,5 @@ class Renderer {
 
     virtual void set_scene(const Scene& scene) = 0;
 
-    virtual void render(const camera::Camera& cam, FrameBuffer& fb_target) = 0;
+    virtual void render(const Camera& cam, FrameBuffer& fb_target) = 0;
 };

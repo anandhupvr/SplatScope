@@ -8,6 +8,7 @@ class FrameBuffer {
 
     void clear(int r, int g, int b);
     void set_pixel(int x, int y, int r, int g, int b);
+    std::vector<int> get_pixel(int x, int y);
     const uint8_t* data() const;
 
     const int width() const {

@@ -1,5 +1,7 @@
 #include "framebuffer.h"
 
+#include <vector>
+
 FrameBuffer::FrameBuffer(int width, int height)
     : width_(width), height_(height), pixels_(width * height * 3, 0) {}
 
@@ -21,6 +23,11 @@ void FrameBuffer::set_pixel(int x, int y, int r, int g, int b) {
     pixels_[index] = r;
     pixels_[index + 1] = g;
     pixels_[index + 2] = b;
+}
+
+std::vector<int> FrameBuffer::get_pixel(int x, int y) {
+    size_t index = (y * width_ + x) * 3;
+    return {pixels_[index], pixels_[index + 1], pixels_[index + 2]};
 }
 
 const uint8_t* FrameBuffer::data() const {

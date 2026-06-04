@@ -13,4 +13,17 @@ Eigen::Vector3f world_to_camera(const Eigen::Vector3f& world_pos,
 
 Eigen::Vector2f camera_to_screen(const Eigen::Vector3f& camera_pos,
                                  const Eigen::Matrix3f& intrinsic);
+
+Eigen::Matrix<float, 2, 3> compute_jacobian(const Eigen::Vector3f& camera_pos, float fx, float fy);
+
+Eigen::Matrix2f project_covarience(const Eigen::Matrix3f& cov3d_world,
+                                   const Eigen::Vector3f& camera_pos,
+                                   const Eigen::Matrix3f& view_roataion,
+                                   float fx,
+                                   float fy);
+
+Eigen::Vector4i compute_bounding_box(const Eigen::Matrix2f& cov2d,
+                                     const Eigen::Vector2f& center_pixels,
+                                     int w,
+                                     int h);
 };  // namespace splat

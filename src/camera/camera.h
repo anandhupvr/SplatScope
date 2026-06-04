@@ -2,7 +2,7 @@
 
 #include "Eigen/Core"
 
-namespace camera {
+// namespace camera {
 
 struct Instrinsic {
     float fx = 800.0f, fy = 800.0f, cx = 640.0f, cy = 360.0f;
@@ -34,7 +34,7 @@ class Camera {
     // mouse controls
     void orbit(float delta_yaw, float delta_pitch);
     void zoom(float delta);
-    // void pan(float delta_x, float delta_y); move target
+    void pan(const Eigen::Vector2f& screen_delta);
 
     Eigen::Matrix4f view_matrix() const;
     Eigen::Matrix4f projection_matrix() const;
@@ -52,4 +52,4 @@ class Camera {
     float pitch_ = 0.0f;
     Instrinsic instrinsic_;
 };
-}  // namespace camera
+// }  // namespace camera

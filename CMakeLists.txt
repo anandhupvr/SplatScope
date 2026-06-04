@@ -34,6 +34,7 @@ set(SOURCES
     src/renderer/cpu_renderer.cpp
     src/splat/splat.cpp
     src/camera/camera.cpp
+    src/camera/controls.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

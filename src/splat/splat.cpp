@@ -30,3 +30,42 @@ Eigen::Vector2f splat::camera_to_screen(const Eigen::Vector3f& camera_pos,
     // prespective divide
     return screen_point.head<2>() / screen_point.z();
 }
+
+Eigen::Matrix<float, 2, 3> splat::compute_jacobian(const Eigen::Vector3f& camera_pose,
+                                                   float fx,
+                                                   float fy) {
+    Eigen::Matrix<float, 2, 3> jacobian;
+    jacobian << fx / camera_pose.z(), 0, -fx * camera_pose.x() / std::pow(camera_pose.z(), 2), 0,
+        fy / camera_pose.z(), -fy * camera_pose.y() / std::pow(camera_pose.z(), 2);
+
+    return jacobian;
+}
+
+Eigen::Matrix2f splat::project_covarience(const Eigen::Matrix3f& cov3d_world,
+                                          const Eigen::Vector3f& camera_pos,
+                                          const Eigen::Matrix3f& view_roataion,
+                                          float fx,
+                                          float fy) {
+    auto j = splat::compute_jacobian(camera_pos, fx, fy);
+    auto cov3d_camera = view_roataion * cov3d_world * view_roataion.transpose();
+    return j * cov3d_camera * j.transpose();
+}
+
+// axis-aligned bouding box in screen space (x_min, y_min, x_max, y_max)
+// so for rasterization no eigen decomposition is needed
+// halft width = sqrt(cov2d(0, 0) * 3), halft height = sqrt(cov2d(1, 1) * 3)
+// 3sigma rule for 2d gaussian distribution, covers 99.7% of the distribution
+Eigen::Vector4i splat::compute_bounding_box(const Eigen::Matrix2f& cov2d,
+                                            const Eigen::Vector2f& center_pixels,
+                                            int w,
+                                            int h) {
+    float half_width = std::sqrt(cov2d(0, 0) * 3);
+    float half_height = std::sqrt(cov2d(1, 1) * 3);
+
+    Eigen::Vector4i bbox;
+    bbox(0) = (int)floor(center_pixels.x() - half_width);     // x_min
+    bbox(1) = (int)(floor)(center_pixels.y() - half_height);  // y_min
+    bbox(2) = (int)ceil(center_pixels.x() + half_width);      // x_max
+    bbox(3) = (int)ceil(center_pixels.y() + half_height);     // y_max
+    return bbox;
+}

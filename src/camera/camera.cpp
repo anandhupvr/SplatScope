@@ -3,7 +3,7 @@
 #include "Eigen/Core"
 #include "Eigen/Geometry"
 
-namespace camera {
+// namespace camera {
 
 Eigen::Matrix3f Instrinsic::as_matrix() const {
     Eigen::Matrix3f K = Eigen::Matrix3f::Zero();
@@ -49,6 +49,33 @@ float Camera::pitch() const {
     return pitch_;
 }
 
+void Camera::orbit(float delta_yaw, float delta_pitch) {
+    yaw_ += delta_yaw;
+    pitch_ += delta_pitch;
+
+    // prevent flipping / gimbal locak
+    constexpr float kLimit = float(M_PI / 2.0) - 0.01f;
+    pitch_ = std::clamp(pitch_, -kLimit, kLimit);
+}
+
+void Camera::zoom(float factor) {
+    distance_ *= factor;
+    distance_ = std::clamp(distance_, 0.01f, 1000.0f);
+}
+
+void Camera::pan(const Eigen::Vector2f& screen_delta) {
+    // Reconstruct camera basis vectors in world frame
+    Eigen::Vector3f forward = (target_ - position()).normalized();
+    Eigen::Vector3f right = forward.cross(kWorldUp).normalized();
+    Eigen::Vector3f up = right.cross(forward);
+
+    // Convert screen delta into world-space shift
+    Eigen::Vector3f shift = right * screen_delta.x() + up * screen_delta.y();
+
+    // Apply shift to target (camera follows because position() depends on target)
+    target_ += shift;
+}
+
 void Camera::set_intrinic(const Instrinsic& intrinsic) {
     instrinsic_ = intrinsic;
 }
@@ -89,7 +116,7 @@ Eigen::Matrix4f Camera::view_matrix() const {
 
     Eigen::Vector3f forward = (center - eye).normalized();  // forward
     // Eigen::Vector3f right = forward.cross(kWorldUp).normalized();  // right
-    // this is to match the up direction with colabmap not using opengl convension (kWorldUp)
+    // this is to match the up direction with COLMAP not using opengl convension (kWorldUp)
     Eigen::Vector3f right =
         forward.cross(Eigen::Vector3f(0.0f, -1.0f, 0.0f)).normalized();  // right
     Eigen::Vector3f up = right.cross(forward);                           // up
@@ -101,4 +128,4 @@ Eigen::Matrix4f Camera::view_matrix() const {
     view.block<3, 1>(0, 3) = -view.block<3, 3>(0, 0) * eye;
     return view;
 }
-}  // namespace camera
+// }  // namespace camera

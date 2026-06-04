@@ -101,7 +101,9 @@ inline bool is_valid_at(const GaussianCloud& cloud, std::size_t i) {
 }
 GaussianCloud filter_valid(const GaussianCloud& src, std::size_t& skipped_out) {
     GaussianCloud out;
-    const std::size_t n = src.size();
+    // const std::size_t n = src.size();
+    const std::size_t n = 5000;
+
     out.mean.reserve(n);
     out.scale.reserve(n);
     out.color.reserve(n);

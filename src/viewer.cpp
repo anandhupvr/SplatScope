@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "camera/camera.h"
+#include "camera/controls.h"
 #include "renderer/cpu_renderer.h"
 #include "scene/ply_loader.h"
 
@@ -15,7 +16,7 @@ Viewer::Viewer(const char* scene_path)
     renderer_->set_scene(scene_);
 }
 void Viewer::run() {
-    camera::Camera camera_;
+    Camera camera_;
     camera_.set_target(Eigen::Vector3f(0.0f, 0.0f, 0.0f));
     camera_.set_distance(5.0f);
 
@@ -23,12 +24,12 @@ void Viewer::run() {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // controls , mouse , keyboard
-        // fb.clear(255, 0, 0);
+        window_.poll_events();
+        update_camera(camera_, window_.input());
+        fb_.clear(0, 0, 0);
         renderer_->render(camera_, fb_);
         display_.show(fb_);
 
         window_.swap_buffers();
-        window_.poll_events();
     }
 }
