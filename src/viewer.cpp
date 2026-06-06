@@ -24,6 +24,8 @@ void Viewer::run() {
     intr.fy = 800.0f;
     intr.cx = window_.width() / 2.0f;
     intr.cy = window_.height() / 2.0f;
+    intr.width = window_.width();
+    intr.height = window_.height();
     camera_.set_intrinic(intr);
 
     while (!window_.should_close()) {

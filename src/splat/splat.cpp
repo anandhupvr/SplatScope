@@ -52,9 +52,8 @@ Eigen::Matrix2f splat::project_covarience(const Eigen::Matrix3f& cov3d_world,
 }
 
 // axis-aligned bouding box in screen space (x_min, y_min, x_max, y_max)
-// so for rasterization no eigen decomposition is needed
+// so for rasterization no eigen decomposition is needed(check again)
 // halft width = sqrt(cov2d(0, 0) * 3), halft height = sqrt(cov2d(1, 1) * 3)
-// 3sigma rule for 2d gaussian distribution, covers 99.7% of the distribution
 Eigen::Vector4i splat::compute_bounding_box(const Eigen::Matrix2f& cov2d,
                                             const Eigen::Vector2f& center_pixels,
                                             int w,

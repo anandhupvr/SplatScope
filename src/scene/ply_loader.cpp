@@ -14,6 +14,8 @@
 
 namespace {
 
+constexpr float SH_C0 = 0.28209479177387814f;
+
 inline float sigmoid(float x) {
     return 1.0 / (1.0 + std::exp(-x));
 }
@@ -91,6 +93,11 @@ void apply_3d_gs_decoding(GaussianCloud& cloud) {
         o = sigmoid(o);
     }
 
+    // color
+    for (auto& c : cloud.color) {
+        c = SH_C0 * c + Eigen::Vector3f(0.5f, 0.5f, 0.5f);
+    }
+
     // rotations are already normalize in `extract_quaternion_data`
 }
 
@@ -102,7 +109,7 @@ inline bool is_valid_at(const GaussianCloud& cloud, std::size_t i) {
 GaussianCloud filter_valid(const GaussianCloud& src, std::size_t& skipped_out) {
     GaussianCloud out;
     const std::size_t n = src.size();
-    // const std::size_t n = 5000;
+    // const std::size_t n = 3000;
 
     out.mean.reserve(n);
     out.scale.reserve(n);

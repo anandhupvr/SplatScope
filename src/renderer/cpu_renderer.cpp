@@ -61,10 +61,7 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
         projected_pixels_.push_back(point_2d);
         projected_depths_.push_back(cam_pos.z());
         projected_opacities_.push_back(cloud.opacity[i]);
-
-        constexpr float SH_C0 = 0.28209479177387814f;
-        Eigen::Vector3f rgb = SH_C0 * cloud.color[i] + Eigen::Vector3f(0.5f, 0.5f, 0.5f);
-        projected_colors_.push_back(rgb.cwiseMax(0.0f).cwiseMin(1.0f));
+        projected_colors_.push_back(cloud.color[i]);
 
         // numberical stablity , regularization
         cov2d(0, 0) += 1e-4f;
@@ -116,6 +113,8 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
 
         for (auto y = box.y(); y < box.w(); y++) {
             for (auto x = box.x(); x <= box.z(); x++) {
+                // Mahalanobis: how far in ellipse units
+                // d2 = 0 at the center, d2 = 1 at 1-sigma, d3 = 9 boundary
                 Eigen::Vector2f delta(x - center.x(), y - center.y());
                 float d2 = delta.dot(cov2d_inv * delta);
                 if (d2 > 9.0)
