@@ -19,6 +19,12 @@ void Viewer::run() {
     Camera camera_;
     camera_.set_target(Eigen::Vector3f(0.0f, 0.0f, 0.0f));
     camera_.set_distance(5.0f);
+    Instrinsic intr;
+    intr.fx = 800.0f;
+    intr.fy = 800.0f;
+    intr.cx = window_.width() / 2.0f;
+    intr.cy = window_.height() / 2.0f;
+    camera_.set_intrinic(intr);
 
     while (!window_.should_close()) {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);

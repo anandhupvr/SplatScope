@@ -6,9 +6,9 @@
 
 #include "splat/splat.h"
 
-int to_bytes(float value) {
-    return static_cast<int>(std::clamp(value * 255.0f, 0.0f, 255.0f));
-}
+// int to_bytes(float value) {
+//     return static_cast<int>(std::clamp(value * 255.0f, 0.0f, 255.0f));
+// }
 
 void CpuRenderer::set_scene(const Scene& scene) {
     scene_ = &scene;
@@ -61,7 +61,11 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
         projected_pixels_.push_back(point_2d);
         projected_depths_.push_back(cam_pos.z());
         projected_opacities_.push_back(cloud.opacity[i]);
-        projected_colors_.push_back(cloud.color[i]);
+
+        constexpr float SH_C0 = 0.28209479177387814f;
+        Eigen::Vector3f rgb = SH_C0 * cloud.color[i] + Eigen::Vector3f(0.5f, 0.5f, 0.5f);
+        projected_colors_.push_back(rgb.cwiseMax(0.0f).cwiseMin(1.0f));
+
         // numberical stablity , regularization
         cov2d(0, 0) += 1e-4f;
         cov2d(1, 1) += 1e-4f;
@@ -73,7 +77,7 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
     // cull
     std::vector<int> visible_;
     for (size_t i = 0; i < projected_pixels_.size(); i++) {
-        if (projected_depths_[i] < 0 && projected_depths_[i] > 1000)
+        if (projected_depths_[i] < 0 || projected_depths_[i] > 1000)
             continue;
 
         const auto& bbox = projected_bbox_[i];
@@ -118,7 +122,7 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
                     continue;
                 float alpha = std::min(0.99f, opacity * std::exp(-0.5f * d2));
 
-                // use proper color, SH coefficients
+                // only used fc1/2/3, more SH coefficients can be added for better lighting effect
                 auto e_color = fb_target.get_pixel(x, y);
                 Eigen::Vector3f existing_color;
                 existing_color << e_color[0] / 255.0f, e_color[1] / 255.0f, e_color[2] / 255.0f;

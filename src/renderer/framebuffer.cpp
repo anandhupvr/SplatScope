@@ -26,6 +26,10 @@ void FrameBuffer::set_pixel(int x, int y, int r, int g, int b) {
 }
 
 std::vector<int> FrameBuffer::get_pixel(int x, int y) {
+    if (x < 0 || x >= width_ || y < 0 || y >= height_) {
+        return {0, 0, 0};  // Out of bounds, return black
+    }
+
     size_t index = (y * width_ + x) * 3;
     return {pixels_[index], pixels_[index + 1], pixels_[index + 2]};
 }

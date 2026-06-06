@@ -63,9 +63,9 @@ Eigen::Vector4i splat::compute_bounding_box(const Eigen::Matrix2f& cov2d,
     float half_height = std::sqrt(cov2d(1, 1) * 3);
 
     Eigen::Vector4i bbox;
-    bbox(0) = (int)floor(center_pixels.x() - half_width);     // x_min
-    bbox(1) = (int)(floor)(center_pixels.y() - half_height);  // y_min
-    bbox(2) = (int)ceil(center_pixels.x() + half_width);      // x_max
-    bbox(3) = (int)ceil(center_pixels.y() + half_height);     // y_max
+    bbox(0) = std::max(0, (int)floor(center_pixels.x() - half_width));      // x_min
+    bbox(1) = std::max(0, (int)floor(center_pixels.y() - half_height));     // y_min
+    bbox(2) = std::min(w - 1, (int)ceil(center_pixels.x() + half_width));   // x_max
+    bbox(3) = std::min(h - 1, (int)ceil(center_pixels.y() + half_height));  // y_max
     return bbox;
 }
