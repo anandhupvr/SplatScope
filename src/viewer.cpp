@@ -10,9 +10,7 @@
 Viewer::Viewer(const char* scene_path)
     : scene_(Scene(scene::load(scene_path))),
       window_(Window(800, 600, "SplatScope")),
-      display_(Display(window_.width(), window_.height())),
-      fb_(FrameBuffer(window_.width(), window_.height())),
-      renderer_(std::make_unique<CpuRenderer>()) {
+      renderer_(std::make_unique<CpuRenderer>(window_.width(), window_.height())) {
     renderer_->set_scene(scene_);
 }
 void Viewer::run() {
@@ -34,9 +32,7 @@ void Viewer::run() {
 
         window_.poll_events();
         update_camera(camera_, window_.input());
-        fb_.clear(0, 0, 0);
-        renderer_->render(camera_, fb_);
-        display_.show(fb_);
+        renderer_->render(camera_);
 
         window_.swap_buffers();
     }

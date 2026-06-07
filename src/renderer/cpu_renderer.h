@@ -1,17 +1,23 @@
 #pragma once
+#include "display.h"
 #include "Eigen/Core"
 
+#include "renderer/framebuffer.h"
 #include "renderer/renderer.h"
 #include "scene/scene.h"
 
 class CpuRenderer : public Renderer {
    public:
+    CpuRenderer(int w, int h);
     void set_scene(const Scene& scene) override;
 
-    void render(const Camera& cam, FrameBuffer& fb_target) override;
+    void render(const Camera& cam) override;
 
    private:
     const Scene* scene_;
+
+    Display display_;
+    FrameBuffer fb_;
 
     // make a struct ?
     std::vector<Eigen::Vector2f> projected_pixels_;

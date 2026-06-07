@@ -1,8 +1,6 @@
 #pragma once
-#include "display.h"
 #include "window/window.h"
 
-#include "renderer/framebuffer.h"
 #include "renderer/renderer.h"
 #include "scene/scene.h"
 
@@ -13,8 +11,6 @@ class Viewer {
 
    private:
     Scene scene_;
-    std::unique_ptr<Renderer> renderer_;
     Window window_;
-    Display display_;
-    FrameBuffer fb_;
+    std::unique_ptr<Renderer> renderer_;
 };

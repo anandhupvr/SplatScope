@@ -9,7 +9,7 @@
 // int to_bytes(float value) {
 //     return static_cast<int>(std::clamp(value * 255.0f, 0.0f, 255.0f));
 // }
-
+CpuRenderer::CpuRenderer(int w, int h) : display_(Display(w, h)), fb_(FrameBuffer(w, h)) {}
 void CpuRenderer::set_scene(const Scene& scene) {
     scene_ = &scene;
     // reserve for projected splats
@@ -21,7 +21,7 @@ void CpuRenderer::set_scene(const Scene& scene) {
     projected_cov2d_inv_.reserve(scene_->gaussians().size());
 }
 
-void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
+void CpuRenderer::render(const Camera& cam) {
     // generate checkboard pattern for testing
     // size_t width = fb_target.width();
     // size_t height = fb_target.height();
@@ -32,6 +32,8 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
     //         fb_target.set_pixel(j, i, white ? 255 : 0, 0, 0);
     //     }
     // }
+
+    fb_.clear(0, 0, 0);
 
     // clear previous frame's projected splats
     projected_pixels_.clear();
@@ -44,8 +46,8 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
     const auto& cloud = scene_->gaussians();
     auto view_mat = cam.view_matrix();
     auto intrinsic = cam.instrinsic_as_matrix();
-    size_t width = fb_target.width();
-    size_t height = fb_target.height();
+    size_t width = fb_.width();
+    size_t height = fb_.height();
     const auto& cov3d_world = scene_->covarience_3d();
 
     for (size_t i = 0; i < cloud.size(); ++i) {
@@ -99,7 +101,7 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
     //     // float opacity = projected_opacities_[i];
     //     Eigen::Vector3f color = projected_colors_[i];
 
-    //     fb_target.set_pixel(x, y, to_bytes(color.x()), to_bytes(color.y()), to_bytes(color.z()));
+    //     fb_.set_pixel(x, y, to_bytes(color.x()), to_bytes(color.y()), to_bytes(color.z()));
     // }
 
     // rasterization
@@ -122,13 +124,16 @@ void CpuRenderer::render(const Camera& cam, FrameBuffer& fb_target) {
                 float alpha = std::min(0.99f, opacity * std::exp(-0.5f * d2));
 
                 // only used fc1/2/3, more SH coefficients can be added for better lighting effect
-                auto e_color = fb_target.get_pixel(x, y);
+                auto e_color = fb_.get_pixel(x, y);
                 Eigen::Vector3f existing_color;
                 existing_color << e_color[0] / 255.0f, e_color[1] / 255.0f, e_color[2] / 255.0f;
                 Eigen::Vector3f blended = alpha * color + (1 - alpha) * existing_color;
                 Eigen::Vector3i final_color = (blended * 255.0f).cast<int>();
-                fb_target.set_pixel(x, y, final_color.x(), final_color.y(), final_color.z());
+                fb_.set_pixel(x, y, final_color.x(), final_color.y(), final_color.z());
             }
         }
     }
+
+    //
+    display_.show(fb_);
 }

@@ -32,6 +32,7 @@ set(SOURCES
     src/renderer/framebuffer.cpp
     src/renderer/Shader.cpp
     src/renderer/cpu_renderer.cpp
+    src/renderer/gpu_renderer.cpp
     src/splat/splat.cpp
     src/camera/camera.cpp
     src/camera/controls.cpp
