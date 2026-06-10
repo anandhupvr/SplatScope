@@ -5,12 +5,14 @@
 #include "camera/camera.h"
 #include "camera/controls.h"
 #include "renderer/cpu_renderer.h"
+#include "renderer/gpu_renderer.h"
 #include "scene/ply_loader.h"
 
 Viewer::Viewer(const char* scene_path)
     : scene_(Scene(scene::load(scene_path))),
       window_(Window(800, 600, "SplatScope")),
-      renderer_(std::make_unique<CpuRenderer>(window_.width(), window_.height())) {
+      //   renderer_(std::make_unique<CpuRenderer>(window_.width(), window_.height())),
+      renderer_(std::make_unique<GpuRenderer>()) {
     renderer_->set_scene(scene_);
 }
 void Viewer::run() {
