@@ -12,7 +12,9 @@ struct SceneBuffers {
 };
 
 struct ScratchBuffers {
+    void* d_viewmat = nullptr;
     void* d_proj_xy = nullptr;
+    void* d_depths = nullptr;
     void* d_framebuf = nullptr;
     int width, height;
 };
@@ -26,7 +28,13 @@ void upload(SceneBuffers& scene,
             const int size);
 
 void forward(const SceneBuffers& scene,
-             const ScratchBuffers& scratch,
+             ScratchBuffers& scratch,
              const float* h_view,
-             const float* h_K);
+             const float fx,
+             const float fy,
+             const float cx,
+             const float cy);
+void alloc_scratch(ScratchBuffers& scratch, int N, int W, int H);
+void free_scratch(ScratchBuffers& scratch);
+void free_scene(SceneBuffers& scene);
 };  // namespace rasterizer

@@ -84,6 +84,10 @@ Eigen::Matrix3f Camera::instrinsic_as_matrix() const {
     return instrinsic_.as_matrix();
 }
 
+Instrinsic Camera::intrinsic() const {
+    return instrinsic_;
+}
+
 Eigen::Vector3f Camera::position() const {
     // Convert spherical coordinates to Cartesian coordinates
     // camera sits on a sphere with radius = distance_ , theta = yaw_ , phi = pitch_

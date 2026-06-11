@@ -42,6 +42,7 @@ class Camera {
     // instrinic parameters
     // Instrinic& instrinic() const;
     Eigen::Matrix3f instrinsic_as_matrix() const;
+    Instrinsic intrinsic() const;
     void set_intrinic(const Instrinsic& intrinsic);
 
    private:
