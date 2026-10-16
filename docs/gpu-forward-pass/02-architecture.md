@@ -290,7 +290,7 @@ Put this table at the top of `core/conventions.h` as a comment, and add a test f
 
 Three small value types cross the `IRenderer` boundary, and **nothing else does**:
 
-- **`RenderSettings`** (rarely changes): near plane (0.2), dilation (0.3 px²), α threshold (1/255), α clamp (0.99), transmittance cutoff (1e-4), background colour, `DebugView` enum, `world_up`. *Tile size is **not** here.* It is a `constexpr` (16), because the block dimensions and shared-memory sizes depend on it at compile time.
+- **`RenderSettings`** (rarely changes): near plane (0.2), dilation (0.3 px²), α threshold (1/255), α clamp (0.99), transmittance cutoff (1e-4), background colour, `DebugView` enum, active `sh_degree` (0–3, clamped to the file's degree), `world_up`. These are the values the keyboard controls in [07 §2](07-platform-and-resolved-decisions.md#2-debug-controls-keyboard-only-imgui-optional) change. *Tile size is **not** here.* It is a `constexpr` (16), because the block dimensions and shared-memory sizes depend on it at compile time.
 - **`CameraParams`** (every frame): `R[9]`, `t[3]`, `fx, fy, cx, cy`, `width, height`, `tan_half_fov_x/y` (for the Jacobian clamp), camera position in world space (for SH view direction later). It is a POD, `static_assert(std::is_trivially_copyable_v<CameraParams>)`, and it is passed **by value** to kernels.
 - **`FrameStats`** (returned): `num_gaussians`, `num_visible`, `num_instances (L)`, per-stage milliseconds (from CUDA events), and a status.
 

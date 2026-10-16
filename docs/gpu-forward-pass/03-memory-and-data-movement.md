@@ -57,8 +57,7 @@ The loader emits **SoA arrays already in device layout**, so upload is a plain `
 | `mean_opacity` | `float4` | 16 | `xyz` = world mean, `w` = activated opacity (the padding lane put to use) |
 | `cov3d_a` | `float4` | 16 | Σ entries `(c00, c01, c02, c11)` |
 | `cov3d_b` | `float2` | 8 | Σ entries `(c12, c22)` |
-| `rgb` (SH0) | `float4` | 16 | `SH_C0·f_dc + 0.5`, clamped ≥ 0; `w` unused |
-| *(later)* `sh` | `float` ×48 (or `half`) | 192 (96) | 16 coefficients × RGB, coefficient-major |
+| `sh` (degree 3, required) | `float` ×48 (fp16 option for the 45 rest) | 192 (≈104) | 16 coefficients × RGB, **coefficient-major** (reordered from the PLY's channel-major `f_rest`); raw DC, *not* pre-baked to RGB. See [04 §1.7](04-cuda-forward-pipeline.md#17-colour-spherical-harmonics-degree-03) and the 4 GB budget in [07 §3](07-platform-and-resolved-decisions.md#3-memory-budget-on-a-4-gb-gpu) |
 
 **Why `cov3d` is split 4 + 2:** six floats is 24 bytes, which isn't a multiple of 16, so one `float6` array can't use 128-bit vector loads. The split gives one `LDG.128` plus one `LDG.64` instead of six scalar loads. Small, but it's the same reasoning as your `float4` means, applied consistently.
 
@@ -72,7 +71,7 @@ The loader emits **SoA arrays already in device layout**, so upload is a plain `
 | `depth` | `float` | 4 | duplicate (key) |
 | `radius` | `int` | 4 | duplicate (rect); 0 ⇔ culled |
 | `conic_opacity` | `float4` | 16 | render: `(A, B, C, opacity)` of Σ₂D⁻¹ |
-| `rgb` | `float4` | 16 | render (needed once SH is view-dependent; with SH0 the render kernel can read the scene `rgb` directly) |
+| `rgb` | `float4` | 16 | render: the view-dependent colour evaluated from SH in preprocess (required with SH degree ≥ 1) |
 | `tiles_touched` | `uint32_t` | 4 | scan input |
 | `offsets` | `uint32_t` | 4 | scan output (inclusive); duplicate |
 
@@ -105,7 +104,7 @@ Ask how each kernel's threads access the data:
 
 ## 4. Memory budget
 
-Per-Gaussian bytes (SH0): scene 56 + per-frame 56 = **112 B**. Per instance: **24 B** (+ small sort temp with `DoubleBuffer`). Per pixel: 4 B. Per tile: 8 B.
+Per-Gaussian bytes, degree-0 baseline: scene 56 + per-frame 56 = **112 B**. (With the required SH degree 3 it's 288 B in fp32 or 200 B with fp16 `f_rest`; the 4 GB GTX 1650 budget is worked out in [07 §3](07-platform-and-resolved-decisions.md#3-memory-budget-on-a-4-gb-gpu).) Per instance: **24 B** (+ small sort temp with `DoubleBuffer`). Per pixel: 4 B. Per tile: 8 B.
 
 $$
 \text{Bytes} \approx 112\,N \;+\; 24 \cdot 1.5\,L_{\text{peak}} \;+\; 4\,WH \;+\; \text{CUB temp}

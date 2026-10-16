@@ -64,6 +64,8 @@ Each milestone has a **learning goal**, the **work**, and a **definition of done
 
 ### M5 — Presentation and measurement
 
+> On the GF63 (Optimus), Phase B works only with the GL context on the NVIDIA GPU. This milestone is done when the **runtime selection** works both ways ([07 §1.2](07-platform-and-resolved-decisions.md#12-hybrid-graphics-optimus-who-owns-the-screen)).
+
 - **Learning goal:** data movement, pinned memory, streams, interop.
 - **Work:**
   - `StageTimer` and an on-screen/console HUD showing N, N_visible, L, L/N_visible and per-stage ms.
@@ -74,9 +76,20 @@ Each milestone has a **learning goal**, the **work**, and a **definition of done
   - With interop on, no 8 MB D2H/H2D copies appear.
   - Resize works, including minimise/restore.
 
-### M6 — Extensions (pick by interest)
+### M6 — Spherical harmonics, degree 0–3 (required)
 
-- **SH degree 1–3**, with view-dependent colour. Store `half` later if memory matters.
+- **Learning goal:** view-dependent colour, memory bandwidth as the limiter on a 4 GB laptop GPU.
+- **Work:**
+  - Loader: keep raw `f_dc`, reorder the 45 channel-major `f_rest` to coefficient-major, infer the degree from the header ([04 §1.7](04-cuda-forward-pipeline.md#17-colour-spherical-harmonics-degree-03)).
+  - A shared `SPLAT_HD eval_sh(degree, dir, coeffs)` used by the CPU oracle and the preprocess kernel; evaluated only for Gaussians that survive culling.
+  - `H` hotkey to cycle the active degree; the L cap from `cudaMemGetInfo` ([07 §3](07-platform-and-resolved-decisions.md#3-memory-budget-on-a-4-gb-gpu)).
+- **DoD:**
+  - Per-Gaussian GPU `rgb` matches the CPU within 1e-5 at degrees 0, 1, 2 and 3.
+  - A unit test checks the `f_rest` reorder against a hand-built PLY.
+- **M6b (when a scene doesn't fit, or SH dominates the preprocess time):** fp16 `f_rest` storage; DoD: max |Δ| ≤ 1/255 vs fp32.
+
+### M7 — Extensions (pick by interest)
+
 - **Opacity-aware radius** ([04 §1.5](04-cuda-forward-pipeline.md#15-dilation-conic-radius)): measure the change in L.
 - **Packed `RenderPacket` AoS** for the render gather ([03 §3](03-memory-and-data-movement.md#soa-vs-aos-decided-per-kernel)): measure sectors/request.
 - **Tighter tile culling:** test each tile against the actual ellipse instead of the bounding circle. Measure L again.

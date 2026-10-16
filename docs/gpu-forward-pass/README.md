@@ -41,6 +41,7 @@ Each document ends with an **Alternatives & trade-offs** section: the other desi
 | 04 | [CUDA forward pipeline](04-cuda-forward-pipeline.md) | Kernel-by-kernel spec with the math (EWA projection, conic, tile rect, key packing, compositing), invariants and debug views |
 | 05 | [C++ implementation guide](05-cpp-implementation-guide.md) | Signature-level sketches: RAII wrappers, owner vs view types, PIMPL, shared `__host__ __device__` math, CMake target layout |
 | 06 | [Roadmap, testing & profiling](06-roadmap-testing-profiling.md) | Milestones with definition-of-done, the test pyramid, synthetic test scenes, profiling, interview probes |
+| 07 | [Platform & resolved decisions](07-platform-and-resolved-decisions.md) | GTX 1650 Max-Q specifics (occupancy, 4 GB budget, Optimus/interop, measuring on a laptop), keyboard debug controls, SH3 memory/bandwidth, scene-format contract |
 
 ---
 
@@ -80,22 +81,18 @@ Every document below ends with an **Alternatives & trade-offs** section for its 
 
 ---
 
-## Decisions this plan assumes (and open questions)
+## Decisions (resolved)
 
-The plan picks a default for each of these so it is complete as written. If you disagree with one, only the sections listed change.
+The full reasoning, platform specifics and budget are in [07](07-platform-and-resolved-decisions.md).
 
-| Decision | Default assumed | Affects |
+| Decision | Resolved as | Affects |
 |---|---|---|
-| Keep the CPU renderer? | **Yes, as the correctness oracle** (fixed to the same math model) | 01-E, 05, 06 |
-| Presentation path | **Phase A:** device→host readback (simple, debuggable, can dump PNGs). **Phase B:** CUDA-GL PBO interop (zero PCIe traffic) | 02, 03 |
-| Color model | **SH degree 0 (DC) first**; degree-3 SH as a later milestone | 03, 04, 06 |
-| Math library on device | **A small in-house `SPLAT_HD` math header** shared by CPU oracle and kernels. Eigen stays at the app layer; glm is dropped | 05 |
+| Keep the CPU renderer? | **Yes, as the correctness oracle** (fixed to the same maths model) | 01-E, 05, 06 |
+| Target machine | **MSI GF63 Thin, GTX 1650 Max-Q** (Turing sm_75, 4 GB, Optimus hybrid graphics), latest CUDA | 03, 07 |
+| Presentation path | **Phase A (readback) is the default** on this laptop. Phase B (CUDA-GL interop) is selected at runtime only when the GL context is on the NVIDIA GPU (PRIME offload / `NvOptimusEnablement`) | 02, 03, 07 §1.2 |
+| Debug controls | **Keyboard hotkeys + window-title stats**; Dear ImGui behind an OFF-by-default option, added only if really needed | 07 §2 |
+| Colour model | **SH degree 3 required** (3 `f_dc` + 45 `f_rest`); runtime degree cycling; fp32 first, fp16 `f_rest` option when memory/bandwidth demands | 04 §1.7, 07 §3, 06 M6 |
+| Scene input | **Official 3DGS training PLY**; `HostScene` is the stable contract so other exporters become extra loader functions later | 07 §4 |
+| Maths library on device | **A small in-house `SPLAT_HD` maths header** shared by the CPU oracle and the kernels. Eigen stays at the app layer; glm is dropped | 05 |
 | Dependencies | **CMake `FetchContent` with pinned tags** (glm/tinyply are currently missing from the repo) | 01-F, 05 |
-| Target | **Single NVIDIA GPU, CUDA ≥ 12, one window, single-threaded render loop** | 02, 03 |
-
-**Questions for you:**
-
-1. Which GPU/driver/CUDA version are you on, and is it a **laptop with hybrid graphics** (Optimus)? If OpenGL runs on the iGPU and CUDA on the dGPU, interop (Phase B) either fails or silently goes through host memory. If so, we stay on Phase A.
-2. Do you want a **runtime CPU↔GPU toggle and debug-view hotkeys** (strongly recommended for learning)? If yes, is Dear ImGui acceptable as a dependency, or should it stay keyboard-only?
-3. Do you want to go up to **SH degree 3** (view-dependent color)? It roughly quadruples per-Gaussian scene memory (see [03](03-memory-and-data-movement.md#4-memory-budget)).
-4. Should the scenes you test with come from the **official 3DGS training output** (`point_cloud.ply` with `f_rest_*`)? Or other exporters too, which may store SH in a different order or quantised?
+| Threading | **Single-threaded render loop, one CUDA stream, one window** | 02 |

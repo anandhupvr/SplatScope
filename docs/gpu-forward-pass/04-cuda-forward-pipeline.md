@@ -106,13 +106,48 @@ tiles = (max.x - min.x) * (max.y - min.y)     // ≥ 0 thanks to clamping
 
 If `tiles == 0`, cull. This **replaces the centre-on-screen test** (review A7): a Gaussian whose centre is off-screen but whose footprint overlaps the image is kept.
 
-### 1.7 Colour
+### 1.7 Colour: spherical harmonics, degree 0–3
 
-SH0: `rgb = max(0, SH_C0 * f_dc + 0.5)`. This is precomputed at load, so preprocess just copies it (or the render kernel reads the scene buffer directly). Later, for SH degree 1–3, evaluate here using the view direction $\mathbf d = \mathrm{normalize}(\boldsymbol\mu - \mathbf c_{cam})$ in **world** space, with the standard real-SH constants from the reference implementation. This is why `CameraParams` carries the camera position.
+**Mental model:** each Gaussian's colour is a *function on the sphere of viewing directions*, and SH is its Fourier series. Band 0 is a constant colour. Band 1 adds a linear gradient across directions (brighter from one side). Bands 2 and 3 add progressively sharper view-dependent effects: specular sheen, and what looks like reflection. Degree 3 means bands 0..3, i.e. $1+3+5+7 = 16$ coefficients per colour channel, so **48 floats per Gaussian**. In the official PLY these are 3 `f_dc_*` and **45 `f_rest_*`** values.
+
+**What it solves:** without view dependence, shiny surfaces look painted on and the training loss compensates with floaters. With it, a single Gaussian can change colour as you orbit. Cycling the active degree 0→3 at runtime (key `H`, see [07 §2](07-platform-and-resolved-decisions.md#2-debug-controls-keyboard-only-imgui-optional)) is one of the most instructive things the viewer can show.
+
+**Direction:** one direction *per Gaussian*, not per pixel: $\mathbf d = \mathrm{normalize}(\boldsymbol\mu - \mathbf c_{cam})$, in **world** space (the frame the coefficients were trained in). That's why `CameraParams` carries the camera position. The approximation is fine because each Gaussian covers a small solid angle.
+
+**Evaluation** (real SH, the reference's constants and sign conventions; copy them verbatim and unit-test them against the reference):
+
+With $\mathbf d = (x, y, z)$ and $k_0 \dots k_{15}$ the RGB coefficient vectors in **coefficient-major** order (§ loader note below):
+
+$$
+\begin{aligned}
+c ={}& C_0\,k_0 \\
+&- C_1\,y\,k_1 + C_1\,z\,k_2 - C_1\,x\,k_3 \\
+&+ C_{2,0}\,xy\,k_4 + C_{2,1}\,yz\,k_5 + C_{2,2}\,(2z^2 - x^2 - y^2)\,k_6 + C_{2,3}\,xz\,k_7 + C_{2,4}\,(x^2 - y^2)\,k_8 \\
+&+ C_{3,0}\,y(3x^2 - y^2)\,k_9 + C_{3,1}\,xyz\,k_{10} + C_{3,2}\,y(4z^2 - x^2 - y^2)\,k_{11} + C_{3,3}\,z(2z^2 - 3x^2 - 3y^2)\,k_{12} \\
+&+ C_{3,4}\,x(4z^2 - x^2 - y^2)\,k_{13} + C_{3,5}\,z(x^2 - y^2)\,k_{14} + C_{3,6}\,x(x^2 - 3y^2)\,k_{15}
+\end{aligned}
+\qquad
+\text{rgb} = \max(0,\; c + 0.5)
+$$
+
+| Constant | Value |
+|---|---|
+| $C_0$ | 0.28209479177387814 |
+| $C_1$ | 0.4886025119029199 |
+| $C_{2,0..4}$ | 1.0925484305920792, −1.0925484305920792, 0.31539156525252005, −1.0925484305920792, 0.5462742152960396 |
+| $C_{3,0..6}$ | −0.5900435899266435, 2.890611442640554, −0.4570457994644658, 0.3731763325901154, −0.4570457994644658, 1.445305721320277, −0.5900435899266435 |
+
+**Three gotchas:**
+
+1. **The `+0.5` and the clamp apply once, after the *full* sum.** Today's loader bakes `SH_C0·f_dc + 0.5` into `rgb` at load time. That's correct for degree 0 only. With higher bands, keep `f_dc` raw and evaluate everything in preprocess. Clamping per band would give a different (wrong) colour.
+2. **The PLY's `f_rest` order is channel-major.** The training code saves `features_rest` with shape `[N, 15, 3]`, *transposed* to `[N, 3, 15]` before flattening. So `f_rest_0..14` are the 15 **red** coefficients, `15..29` green and `30..44` blue. The kernel wants coefficient-major `k_j = (r, g, b)`. **Reorder once in the loader:** `k[j+1].channel[c] = f_rest[c*15 + j]`. Getting this wrong still produces a plausible image at degree 0 and subtle colour garbage at higher degrees. Test it by checking that a degree-1 render changes only with direction, with no colour channel swaps.
+3. **Infer the degree from the header:** count the `f_rest_*` properties. 0 → degree 0, 9 → 1, 24 → 2, 45 → 3. Anything else is an error. Clamp the runtime degree to `min(file_degree, settings.sh_degree)`.
+
+**Cost:** each visible Gaussian reads 192 B of SH per frame (96 B in fp16). Evaluate SH **only after culling** (radius > 0), never for culled Gaussians. On a 128–192 GB/s laptop GPU this is the dominant memory traffic in preprocess for multi-million-Gaussian scenes. See [07 §3](07-platform-and-resolved-decisions.md#3-memory-budget-on-a-4-gb-gpu) for the numbers and the fp16 decision.
 
 ### 1.8 Write outputs
 
-`mean2d, depth = t_z, radius, conic_opacity = (A, B, C, opacity), tiles_touched`.
+`mean2d, depth = t_z, radius, conic_opacity = (A, B, C, opacity), rgb` (from §1.7), `tiles_touched`.
 
 **Launch:** 1-D, 256 threads per block, `grid = ceil(N/256)`. **Skip the launch if N == 0**, since a zero-sized grid is a launch error.
 

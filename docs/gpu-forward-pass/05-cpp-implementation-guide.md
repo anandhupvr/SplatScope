@@ -247,8 +247,9 @@ struct HostScene {
     std::vector<Vec4f> mean_opacity;     // xyz world, w = sigmoid(opacity)
     std::vector<Vec4f> scale;            // exp(scale), w = 0
     std::vector<Vec4f> quat_wxyz;        // normalised; order in the NAME
-    std::vector<Vec4f> rgb;              // SH0 decoded, clamped ≥ 0
-    // later: std::vector<float> sh_rest; int sh_degree;
+    std::vector<float> sh;               // N × 16 × 3, coefficient-major, raw (DC NOT pre-baked to RGB)
+    int                sh_degree = 0;    // inferred from the count of f_rest_* (0/9/24/45 → 0/1/2/3)
+    SceneInfo          info;             // count, skipped, source format (see 07 §4)
     Aabb               bounds;           // for camera framing on load
     std::size_t size() const noexcept;
     void validate() const;               // all arrays equal length; throws otherwise
