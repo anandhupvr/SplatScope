@@ -41,7 +41,7 @@ Each document ends with an **Alternatives & trade-offs** section: the other desi
 | 04 | [CUDA forward pipeline](04-cuda-forward-pipeline.md) | Kernel-by-kernel spec with the math (EWA projection, conic, tile rect, key packing, compositing), invariants and debug views |
 | 05 | [C++ implementation guide](05-cpp-implementation-guide.md) | Signature-level sketches: RAII wrappers, owner vs view types, PIMPL, shared `__host__ __device__` math, CMake target layout |
 | 06 | [Roadmap, testing & profiling](06-roadmap-testing-profiling.md) | Milestones with definition-of-done, the test pyramid, synthetic test scenes, profiling, interview probes |
-| 07 | [Platform & resolved decisions](07-platform-and-resolved-decisions.md) | GTX 1650 Max-Q specifics (occupancy, 4 GB budget, Optimus/interop, measuring on a laptop), keyboard debug controls, SH3 memory/bandwidth, scene-format contract |
+| 07 | [Platform & resolved decisions](07-platform-and-resolved-decisions.md) | GTX 1650 Max-Q on Linux (occupancy, 4 GB budget, PRIME offload/interop, toolchain checklist, measuring on a laptop), keyboard debug controls, SH3 memory/bandwidth, scene-format contract |
 
 ---
 
@@ -88,8 +88,8 @@ The full reasoning, platform specifics and budget are in [07](07-platform-and-re
 | Decision | Resolved as | Affects |
 |---|---|---|
 | Keep the CPU renderer? | **Yes, as the correctness oracle** (fixed to the same maths model) | 01-E, 05, 06 |
-| Target machine | **MSI GF63 Thin, GTX 1650 Max-Q** (Turing sm_75, 4 GB, Optimus hybrid graphics), latest CUDA | 03, 07 |
-| Presentation path | **Phase A (readback) is the default** on this laptop. Phase B (CUDA-GL interop) is selected at runtime only when the GL context is on the NVIDIA GPU (PRIME offload / `NvOptimusEnablement`) | 02, 03, 07 §1.2 |
+| Target machine | **MSI GF63 Thin, GTX 1650 Max-Q** (Turing sm_75, 4 GB, Optimus hybrid graphics), **Linux**, latest CUDA | 03, 07 |
+| Presentation path | **Phase A (readback) is the default** on this laptop. Phase B (CUDA-GL interop) is selected at runtime only when the GL context is on the NVIDIA GPU (Linux PRIME render offload, X11/XWayland) | 02, 03, 07 §1.2 |
 | Debug controls | **Keyboard hotkeys + window-title stats**; Dear ImGui behind an OFF-by-default option, added only if really needed | 07 §2 |
 | Colour model | **SH degree 3 required** (3 `f_dc` + 45 `f_rest`); runtime degree cycling; fp32 first, fp16 `f_rest` option when memory/bandwidth demands | 04 §1.7, 07 §3, 06 M6 |
 | Scene input | **Official 3DGS training PLY**; `HostScene` is the stable contract so other exporters become extra loader functions later | 07 §4 |

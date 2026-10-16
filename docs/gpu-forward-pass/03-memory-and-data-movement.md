@@ -200,7 +200,7 @@ The sync costs microseconds of latency, not throughput. Keep it until a profile 
 | Option | Pros | Cons | Use for |
 |---|---|---|---|
 | **Explicit `cudaMalloc` + RAII** (chosen) | Predictable; memcheck-friendly; you see every transfer | You write the copies | Everything hot |
-| Unified memory (`cudaMallocManaged`) | One pointer valid on CPU and GPU; great for prototyping and debugging (inspect device buffers from the host) | Page-fault-driven migration stalls kernels unless you `cudaMemPrefetchAsync`; on Windows/WSL the CPU and GPU can't access it concurrently | Optional debug mode: e.g. make `GeometryBuffers` managed to inspect them from the CPU oracle tests |
+| Unified memory (`cudaMallocManaged`) | One pointer valid on CPU and GPU; great for prototyping and debugging (inspect device buffers from the host) | Page-fault-driven migration stalls kernels unless you `cudaMemPrefetchAsync`; on Linux with a Turing GPU, CPU and GPU can access it concurrently, but a page touched by both ping-pongs over PCIe | Optional debug mode: e.g. make `GeometryBuffers` managed to inspect them from the CPU oracle tests |
 | Zero-copy pinned memory (`cudaHostAlloc` mapped) | The GPU reads host RAM directly over PCIe; no copy | Every access crosses PCIe; only good for data read once | Not needed here |
 | Pool allocator (`cudaMallocAsync`, or RMM) | Cheap allocation per frame; stream-ordered | Less explicit; pool tuning | Production version of the grow-only policy |
 

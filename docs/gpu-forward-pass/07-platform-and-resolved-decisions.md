@@ -38,8 +38,10 @@ On the GF63 Thin, the internal panel is wired to the **Intel iGPU**, and there's
 
 - **Phase A (readback)** always works: CUDA renders into its own buffer, you copy to the host, and GL (on Intel) uploads it as a texture.
 - **Phase B (interop)** works **only if the GL context is on the NVIDIA GPU too**:
-  - **Linux:** run with PRIME render offload, `__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./splatscope scene.ply` (or the distribution's `prime-run` wrapper). This needs the proprietary NVIDIA driver.
-  - **Windows:** export `extern "C" __declspec(dllexport) unsigned long NvOptimusEnablement = 1;` from the executable, or pick the high-performance GPU for the app in the NVIDIA Control Panel or Windows graphics settings.
+  - **PRIME render offload (recommended):** run `__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./splatscope scene.ply`, or your distribution's `prime-run` wrapper. This needs the proprietary NVIDIA driver, and the system's PRIME profile must be *on-demand* (Ubuntu: `prime-select query` → `on-demand`), not *intel*-only.
+  - **Global NVIDIA mode** (Ubuntu `prime-select nvidia`, or the equivalent in your distribution's GPU switcher, then log out and back in) puts the whole X session on the dGPU. Interop works without environment variables, at the cost of battery life and heat for everything else running.
+  - **Wayland sessions:** those two variables select the *GLX* vendor, so they only apply when GLFW uses X11. GLFW ≥ 3.4 picks Wayland (EGL) by default on a Wayland session. The simplest fix is `glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11)` before `glfwInit()`, which runs the window through XWayland where GLX offload works. Make it a command-line flag (`--x11`) rather than unconditional.
+  - **Verify, don't assume:** `glxinfo -B` run with the same environment shows which GPU renders (`OpenGL renderer string`). The app's startup log of `GL_RENDERER` must say NVIDIA for Phase B to be enabled.
 
 **Runtime decision (do this, don't hard-code):** at startup, log `glGetString(GL_VENDOR/GL_RENDERER)`, then call `cudaGLGetDevices(..., cudaGLDeviceListAll)`. Enable Phase B only if it returns the CUDA device you're using. Otherwise fall back to Phase A, with one log line explaining why. A wrong guess here shows up as a registration error or a black window that looks like a renderer bug.
 
@@ -55,7 +57,23 @@ Use **1280×720**, not the panel's 1920×1080. You get 3600 tiles instead of 816
 - Warm up for ~100 frames. Report the **median and p95 over ≥ 300 frames**, never a single frame or a short mean.
 - Compare A/B variants back to back in the same session, ideally by toggling at runtime, not across reboots.
 - On Linux the dGPU may be powered down when idle, so the first CUDA call can take hundreds of milliseconds. Never include initialisation in frame timings.
-- `glfwSwapInterval(0)` while measuring ([03 §5](03-memory-and-data-movement.md#5-streams-and-synchronisation)).
+- `glfwSwapInterval(0)` while measuring ([03 §5](03-memory-and-data-movement.md#5-streams-and-synchronisation)). With PRIME offload the driver may still throttle presentation, so the GPU stage timings from CUDA events are the numbers to trust, not FPS.
+
+### 1.5 Linux toolchain checklist
+
+These are the Linux-specific failures you're likely to hit, in roughly the order you'll hit them:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `CMake 3.30 or higher is required` | `CMakeLists.txt:1` asks for 3.30, but distribution packages often lag (Ubuntu 24.04 ships 3.28) | Nothing used needs 3.30; `CMAKE_CUDA_ARCHITECTURES native` needs **3.24**. Lower the minimum, or install a newer CMake from Kitware's apt repository or `pip install cmake` |
+| `unsupported GNU version! gcc versions later than N are not supported` from nvcc | Rolling or recent distributions ship a newer GCC than your nvcc accepts | Install a supported GCC alongside and set `-DCMAKE_CUDA_HOST_COMPILER=g++-<supported>` (put it in the CMake preset). Don't use `-allow-unsupported-compiler` except as a last resort |
+| `nvcc` not found / CMake can't find CUDA | Toolkit installed under `/usr/local/cuda-<ver>` but not on `PATH` | `export PATH=/usr/local/cuda/bin:$PATH` or `-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc` in the preset |
+| `ncu` reports `ERR_NVGPUCTRPERM` | GPU performance counters are restricted to root by default | Run `ncu` with `sudo`, or set `options nvidia NVreg_RestrictProfilingToAdminUsers=0` in a file under `/etc/modprobe.d/`, rebuild the initramfs and reboot |
+| `cudaGetDeviceCount` returns 0 or "no CUDA-capable device" | Nouveau driver loaded, or the proprietary driver isn't installed or loaded | `nvidia-smi` must list the GTX 1650; blacklist nouveau and install the distribution's NVIDIA driver package |
+| Driver/toolkit mismatch ("driver version is insufficient for CUDA runtime version") | Toolkit newer than the driver supports | Upgrade the driver, or install the toolkit version matching it (`nvidia-smi` shows the maximum CUDA version the driver supports) |
+| First frame or first CUDA call takes ~0.5 s | Runtime power management woke the powered-down dGPU | Expected; exclude initialisation from timings |
+
+Development packages the build needs (Debian/Ubuntu names; other distributions are similar): `libglfw3-dev`, `libeigen3-dev`, `pkg-config`, plus the CUDA toolkit. glm is no longer needed once the shared maths header replaces it ([05 §4](05-cpp-implementation-guide.md#4-shared-math-for-host-and-device)), and tinyply comes in through FetchContent.
 
 ---
 
@@ -202,7 +220,7 @@ This changes the milestones in [06](06-roadmap-testing-profiling.md#1-milestones
 | Option | Pros | Cons |
 |---|---|---|
 | **Phase A on the iGPU's GL** (default) | Always works; no environment setup | Two explicit 3.7 MB copies per frame (≈0.5 ms) |
-| Phase B with PRIME offload / `NvOptimusEnablement` | Teaches interop; no explicit copies | Needs environment or driver setup; the driver still copies to the iGPU for display |
+| Phase B with PRIME render offload (or global NVIDIA mode) | Teaches interop; no explicit copies | Needs environment variables (and X11/XWayland under GLFW); the driver still copies to the iGPU for display |
 | Headless rendering (EGL on the NVIDIA device, write images) | No window system; perfect for automated golden tests | Not interactive. Useful as the test driver from [02 §9.4](02-architecture.md#94-presentation-api) |
 
 ### Debug UI
