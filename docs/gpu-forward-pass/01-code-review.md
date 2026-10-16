@@ -267,3 +267,20 @@ The CPU path is valuable *only* if it implements the **same model** as the GPU p
 5. B1 conventions, before you add interop or PNG dumps
 6. C2/D-series once there is a stage timer to measure the improvement
 7. F-series alongside the CMake restructure
+
+---
+
+## Alternatives & trade-offs: findings with more than one valid fix
+
+Most findings have one right answer. These have several, and picking deliberately is part of the lesson.
+
+| Finding | Option 1 | Option 2 | Option 3 | Pick |
+|---|---|---|---|---|
+| **A2** culled slots not written | **Write every slot in the kernel** (zero, then early-out) | `cudaMemsetAsync` the outputs every frame | Compact visible Gaussians into a separate list (stream compaction) and run later stages on that only | **1.** Free, and it keeps the rule local to the producer. **2** costs an extra full memory pass and hides the rule. **3** is a real optimisation when most Gaussians are culled (camera inside the scene), but adds a scan and an index indirection. Revisit it after profiling |
+| **A3** depth in the key | **Raw float bits** (32 bits) | Quantised depth, e.g. `uint16(depth / far · 65535)`, with tile + depth in a **32-bit** key | Linearised `log(depth)` quantised | **1** is exact. **2** halves key memory and sort passes, but ties within a quantum flicker, and you need a `far` value. **3** spends the precision near the camera, where it's visible. Try 2/3 as an experiment and measure sort time against the visual difference |
+| **A4** rectangle mismatch | **One shared `get_tile_rect`** | Store the rectangle per Gaussian in preprocess (`uint4`) and read it in duplicate | — | **1** costs nothing extra. **2** adds 16 B × N of memory traffic but makes "count == write" true by construction. Either is fine. 1 also covers the CPU oracle |
+| **A8** off-axis blow-up | **Clamp x/z, y/z to 1.3·tan(fov/2) for J** (reference) | Cull Gaussians whose centre is outside a guard band | Use an unscented transform or a better projection model | **1** matches the reference, so images are comparable with training renders. 2 causes popping at the edges. 3 is a research topic |
+| **B1** the vertical flip | **Flip texcoord v in the presenter** | Flip v in the projection (`fy < 0` or `v = H − 1 − v`) | Flip when copying rows on readback | **1:** one place, free, and the image buffer stays in PNG/OpenCV order. **2** spreads the convention into the maths (Jacobian signs change). **3** costs a pass and doesn't exist in the interop path |
+| **C2** per-frame allocation | **Grow-only typed buffers** | Stream-ordered pool (`cudaMallocAsync`) | Worst-case preallocation (`N × K` instances) | See [03 §2](03-memory-and-data-movement.md#2-allocation-policy-per-class) and [03 Alternatives](03-memory-and-data-movement.md#alternatives--trade-offs) |
+| **C1/C3** leaks, double frees | **RAII owners** (`DeviceBuffer<T>`) | Keep the C-style structs, add an `init`/`destroy` pair and a "destroyed" flag | Use `thrust::device_vector` | **1.** 2 still relies on remembering to call the pair. 3 is RAII, but copies are *deep and implicit* and `resize` launches a fill kernel. See [05 Alternatives](05-cpp-implementation-guide.md#alternatives--trade-offs) |
+| **E3** CPU oracle blending | **Front-to-back, float accumulation** (same as the GPU) | Back-to-front, float accumulation (painter's) | — | **1** gives identical structure to the GPU, so intermediate values (T, n_contrib) are comparable too. 2 is the simplest way to understand the over-operator and gives the same final image. Fine as a first step |

@@ -354,3 +354,62 @@ Key settings and why:
 | Warnings | `-Wall -Wextra -Wpedantic` (host); `-Xcompiler=-Wall` (nvcc host side) | Several review findings are warnings away |
 | Sanitizers (host) | an `ASan+UBSan` preset for the CPU path and loader | Catches the host-side half of ownership bugs |
 | `CMakePresets.json` | `debug`, `release`, `relwithdebinfo`, `cpu-only`, `asan` | One command per configuration; documents the supported builds |
+
+---
+
+## Alternatives & trade-offs
+
+### Owning device memory
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Own `DeviceBuffer<T>`** (chosen) | Exact semantics you choose (grow-only, discard, no init); ~100 lines; you learn the rule of five | You maintain it |
+| `std::unique_ptr<T[], CudaFreeDeleter>` | Zero code; standard move semantics | Carries no size or capacity; growth policy lives elsewhere |
+| `thrust::device_vector<T>` | RAII, size, iterators, works with Thrust algorithms | **Copy constructor is a deep, implicit device copy** (an accidental by-value parameter copies megabytes); `resize` value-initialises with a fill kernel; temp allocations hidden in algorithms |
+| RMM (`rmm::device_uvector`, `rmm::device_buffer`) | Uninitialised, stream-ordered, pluggable memory resources (pool, arena); production-grade | Large dependency (RAPIDS) |
+
+### Error handling
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Exceptions at setup; checked-but-cheap in the frame loop** (chosen) | RAII unwinding releases GL/CUDA cleanly; error reporting stays out of every signature | Exceptions can't cross into device code (irrelevant: device code reports via sticky errors) |
+| `std::expected<T, Error>` (C++23) or `tl::expected` (C++17/20) | Errors visible in signatures; no hidden control flow | Every call site must propagate; noisy for "should never happen" CUDA failures |
+| `abort()` on error (today) | Simplest; core dump at the failure | No cleanup, no message to the user for ordinary errors such as a bad file path |
+
+### Passing per-frame uniforms to kernels
+
+| Option | Pros | Cons |
+|---|---|---|
+| **By value in an args struct** (chosen) | No copy call; broadcast from the constant bank; changes are automatically ordered with the launch | 4 KB limit (32 KB on newer setups); copied per launch (tiny) |
+| `__constant__` symbol + `cudaMemcpyToSymbolAsync` | Shared by several kernels without repeating the parameter | Global state in the `.cu`; you must order the copy with the stream yourself; the kernel can't be launched twice concurrently with different values |
+| Device buffer + pointer (today) | Arbitrary size | An extra copy and an extra indirection |
+
+### Hiding CUDA from the app
+
+| Option | Pros | Cons |
+|---|---|---|
+| **PIMPL concrete class** (chosen) | A concrete `GpuRenderer` type: GPU-only methods (debug views, stats) callable without casting | Out-of-line special members; one heap allocation |
+| Interface + factory: `std::unique_ptr<IRenderer> make_gpu_renderer(cfg)`; the class lives entirely in a `.cu` | Less boilerplate: no `Impl`, no out-of-line destructor dance, CUDA types allowed in the class | Only the interface is visible; GPU-specific features must go through the interface or `dynamic_cast` |
+
+Both are fine. If you don't expect GPU-only methods, **the factory is simpler**: it gets the same compile-time isolation with less code.
+
+### Device-side maths
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Own `SPLAT_HD` POD header** (chosen) | Exactly the operations needed; explicit layout and row/column order; identical source on CPU and GPU | You write and test it (~150 lines) |
+| glm (`GLM_FORCE_CUDA`) | Mature; GLSL-like syntax familiar from your shader work | Column-major constructor traps (review A5); global macro configuration |
+| CUDA `float3`/`float4` + `helper_math.h` (from the CUDA samples) | Native vector types; the operators the samples use | Not a header CUDA guarantees; it's copied from the samples. No matrix types |
+| Eigen in device code | Same library as the host | Heavy compile times; partial device support; alignment pitfalls |
+
+### GL handle ownership
+
+| Option | Pros | Cons |
+|---|---|---|
+| **`GlHandle<Policy>`** (chosen) | Clear, typed, move-only | One small template |
+| `std::unique_ptr` with a custom deleter | Standard | `GLuint` isn't a pointer: the deleter must define a `pointer` type that satisfies *NullablePointer*. Doable, but more obscure than a 30-line class |
+| A wrapper library (globjects, Magnum) | Complete | Large dependency for six object types |
+
+### Test framework
+
+doctest (single header, fastest compile) vs GoogleTest (most common in industry; parameterised tests, death tests) vs Catch2 (BDD style). **GoogleTest** if interview familiarity matters, **doctest** if compile time does. Either way, wrap GPU tests in a fixture that skips cleanly when no CUDA device is present.

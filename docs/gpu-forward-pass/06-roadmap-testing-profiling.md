@@ -200,3 +200,38 @@ Short answers; the linked sections have the full reasoning.
 | SoA or AoS? | It depends on the access pattern. Coalesced per-element access favours SoA; a random gather of several fields favours a packed AoS record |
 | Why doesn't a `float3` array get 128-bit loads? | It is 12-byte aligned, not 16, so the compiler issues three 32-bit loads. Coalescing is fine; it's the instruction count that suffers |
 | Why call `cudaGraphicsUnmapResources` before GL draws? | Unmapping orders all prior CUDA work on that stream before subsequent GL work. Without it there's a race |
+
+---
+
+## Alternatives & trade-offs
+
+### Bring-up order
+
+| Option | How | Pros | Cons |
+|---|---|---|---|
+| **Stage by stage, each verified** (chosen) | M2 → M3 → M4 as above | Each bug is confined to one stage | No full GPU image until M4; motivation dips |
+| **Naïve vertical slice first, then refine** (strong alternative) | GPU v0: preprocess → `cub` sort of the *visible* Gaussians by depth (N, not L) → one thread per pixel loops over **all** sorted Gaussians front-to-back. No tiles at all | A correct full GPU image within days; v0 becomes a **second oracle** for the tiled version, and the speed-up of tiling becomes measurable | O(pixels × N): slow for big scenes (use a small scene or a subsampled cloud) |
+| Port the reference rasterizer, then rewrite piece by piece | Copy `diff-gaussian-rasterization`'s forward kernels behind your interfaces | Working immediately; you swap stages one by one and diff against the original | Easy to stop understanding *why*; licence check needed (the reference is research-licensed) |
+
+If motivation or time matters, **do the vertical slice between M2 and M3**. It costs about one extra kernel and pays back as a test oracle for the rest of the project.
+
+### Choice of oracle
+
+| Oracle | Strength | Cost |
+|---|---|---|
+| **Own CPU renderer with shared maths** (chosen) | Always available, debuggable line by line, same intermediate buffers | Shares your *misunderstandings*: if the shared maths is wrong, both agree |
+| The official reference renderer (Python/PyTorch `diff-gaussian-rasterization`), fed an exported camera | Independent implementation: catches the errors your CPU and GPU share (conventions, SH constants, dilation) | Needs a Python + CUDA PyTorch environment; camera convention conversion |
+| Training images from the dataset (COLMAP poses) | Ground truth for the *scene*, not just the renderer | Differences include training error, so it's only a coarse check (PSNR in the high 20s to 30s is normal) |
+| GPU naïve vertical slice (above) | Independent of the tiling logic | Shares the preprocess stage |
+
+Use all of them, at different frequencies. The CPU oracle runs in every test run. The official renderer is a one-time "are my conventions right" check per milestone. Training images are a sanity check at the end.
+
+### Measurement tooling
+
+| Tool | Answers | Overhead |
+|---|---|---|
+| **CUDA events per stage** (chosen, always on) | How long each stage takes on the GPU | Negligible |
+| **NVTX ranges** (`nvtxRangePush/Pop`, add alongside the events) | Labels CPU *and* GPU work by name on the Nsight Systems timeline | Negligible; strongly recommended |
+| Nsight Systems | Where the gaps and syncs are | Run on demand |
+| Nsight Compute | Why one kernel is slow (memory vs compute, divergence, occupancy) | Very high per kernel (replays it); never use it for FPS |
+| `std::chrono` around GPU calls | Nothing useful: it measures launch time, not execution, unless you sync (which changes what you measure) | — |

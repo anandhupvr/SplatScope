@@ -180,3 +180,61 @@ The GPU's copy engine is a DMA device. It reads *physical* memory directly and n
 **Alternative (texture path):** `cudaGraphicsGLRegisterImage` on the texture, map it, get a `cudaArray_t`, create a `cudaSurfaceObject_t`, and write with `surf2Dwrite`. This skips the PBO→texture copy, but the kernel writes through the surface API (byte-addressed x coordinate, a gotcha) instead of plain pointers. Do the PBO version first.
 
 **Device-selection gotcha:** interop only works if CUDA runs on the same GPU that owns the GL context. Before any other CUDA call, use `cudaGLGetDevices(&count, devs, 1, cudaGLDeviceListAll)` and `cudaSetDevice(devs[0])`. On hybrid-graphics laptops (GL on the integrated GPU), registration fails or silently routes through host memory. That's one of the open questions in the [README](README.md#decisions-this-plan-assumes-and-open-questions). Keep Phase A as the fallback, selected at runtime.
+
+---
+
+## Alternatives & trade-offs
+
+### Getting L to the host (sync point 1)
+
+| Option | How | Pros | Cons |
+|---|---|---|---|
+| **Read L back every frame** (chosen) | Pinned 4-byte async copy + stream sync | Exact capacity; simple | A small CPU↔GPU bubble per frame |
+| Worst-case preallocation | Capacity = N × K; each Gaussian is limited to K tiles | No readback at all | Memory scales with a guess; **clamping K silently drops tiles**, so large splats get holes when you zoom in |
+| Lagged capacity | Use the previous frame's L (+ margin) for capacity; the duplicate kernel checks bounds and raises an overflow flag; rerun the frame (or accept one bad frame) on overflow | No sync in the common case | Overflow-handling path, one frame of possible artifacts; more states to test |
+| Device-driven control flow | CUDA graphs with conditional nodes (CUDA 12.3+) or dynamic parallelism launch the later stages from the GPU | No host round trip at all | CUB's host-side `num_items` API doesn't fit; complex; hard to debug |
+
+The sync costs microseconds of latency, not throughput. Keep it until a profile says otherwise.
+
+### Device memory model
+
+| Option | Pros | Cons | Use for |
+|---|---|---|---|
+| **Explicit `cudaMalloc` + RAII** (chosen) | Predictable; memcheck-friendly; you see every transfer | You write the copies | Everything hot |
+| Unified memory (`cudaMallocManaged`) | One pointer valid on CPU and GPU; great for prototyping and debugging (inspect device buffers from the host) | Page-fault-driven migration stalls kernels unless you `cudaMemPrefetchAsync`; on Windows/WSL the CPU and GPU can't access it concurrently | Optional debug mode: e.g. make `GeometryBuffers` managed to inspect them from the CPU oracle tests |
+| Zero-copy pinned memory (`cudaHostAlloc` mapped) | The GPU reads host RAM directly over PCIe; no copy | Every access crosses PCIe; only good for data read once | Not needed here |
+| Pool allocator (`cudaMallocAsync`, or RMM) | Cheap allocation per frame; stream-ordered | Less explicit; pool tuning | Production version of the grow-only policy |
+
+### Numeric precision of stored data
+
+| Option | Bytes (SH3 colour) | Pros | Cons |
+|---|---|---|---|
+| **fp32 everywhere** (chosen first) | 192 B | Exact match with the training output and the CPU oracle | Memory |
+| fp16 SH / colour, fp32 geometry | 96 B | Halves the biggest buffer; `half2` loads are cheap | Small colour error; still fine for display |
+| fp16 covariance | 12 B instead of 24 | Less traffic in preprocess | **Risky:** thin Gaussians have tiny eigenvalues, and half precision (~3 decimal digits) can make Σ indefinite, so `det ≤ 0` culls valid splats |
+| Quantised / codebook compression (as in compressed-3DGS work) | ~10–20× smaller | Large scenes fit on small GPUs | Decode cost; a different project |
+
+### Where Σ₃D comes from
+
+| Option | Memory | Per-frame ALU | When |
+|---|---|---|---|
+| **Precompute once on the GPU** (chosen) | 24 B | none | Static scenes (a viewer) |
+| Recompute from scale + rotation in preprocess (what training does) | 28 B (scale + quaternion) | ~30 FLOPs/Gaussian | If you add interactive editing (scaling or rotating splats live) |
+| Precompute on the CPU and upload (today) | 24 B on the device, plus 36 B × N of host `Matrix3f` | none | Works, but duplicates maths and memory on the host |
+
+### Layout
+
+| Option | Pros | Cons |
+|---|---|---|
+| **SoA with 16/8-byte fields** (chosen) | Coalesced per-Gaussian access in preprocess; easy to add fields | Gather in render touches several arrays |
+| AoS "render packet" (32 B) | One sector per Gaussian in the render gather | Wasted bandwidth when a stage needs only one field |
+| AoSoA (blocks of 32 Gaussians, SoA inside each block) | Coalesced *and* local | Index arithmetic everywhere; the pattern CPU SIMD code uses. Overkill here |
+
+### Image transport
+
+| Option | Copies per frame | Complexity | Notes |
+|---|---|---|---|
+| **Phase A: D2H readback + `glTexSubImage2D`** | 2 PCIe crossings | Lowest | Can always dump PNGs; the fallback path |
+| **Phase B: PBO interop** | 1 device-local copy | Low | Recommended steady state |
+| Texture/surface interop (`surf2Dwrite`) | 0 | Medium | Kernel writes through the surface API |
+| Render directly into the GL default framebuffer | — | — | Impossible from CUDA: the default framebuffer isn't shareable. That's why a texture is needed at all |

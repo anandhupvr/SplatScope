@@ -289,3 +289,60 @@ Add a `DebugView` enum to `RenderSettings`. Each view is a few lines in the rend
 | Hang or garbage only for some window sizes | Early `return` before `__syncthreads` in edge tiles (§6.4) |
 | Random speckles that move between runs | Missing barrier before the shared-memory reload (§6.4) |
 | Image darker than the CPU reference | Truncation instead of rounding in the uint8 conversion; or the CPU accumulating in uint8 (E3) |
+
+---
+
+## Alternatives & trade-offs
+
+### The core ordering strategy
+
+| Option | How ordering is achieved | Pros | Cons |
+|---|---|---|---|
+| **Global sort of (tile, depth) keys** (chosen; the paper's method) | One radix sort over L instances | Exact match with training; each tile's list is contiguous; early termination | L ≫ N; sort is a major cost; per-tile ordering by *centre* depth can still "pop" when two Gaussians swap centre order |
+| Global depth sort of N + graphics-pipeline blending | Sort N centres once; draw quads back-to-front with fixed-function blending | Sorts N, not L; portable (WebGL); ROPs do the blending | No early termination, heavy overdraw; 8-bit framebuffers band (use `RGBA16F`) |
+| Per-tile local sort (shared-memory bitonic per tile) | Bin without depth, then sort each tile's list inside its block | No global sort; keys are 32-bit | Tiles with thousands of Gaussians overflow shared memory; load imbalance gets worse |
+| Per-pixel resorting (StopThePop-style hierarchical sorting) | Refine the order per pixel with a small sorted window | Removes popping | Extra work per pixel; a research-grade refinement |
+| Order-independent transparency (weighted blended OIT) | No sort; weight by depth | Cheapest | Approximate. Visibly wrong for the dense, opaque-ish Gaussians that make up real scenes |
+
+### Sort key
+
+| Option | Key size | Passes (8-bit digits) | Trade-off |
+|---|---|---|---|
+| **64-bit `[tile:32 \| depth bits:32]`, `end_bit = 32 + bits(T)`** (chosen) | 8 B | ~6 at 1080p | Exact |
+| 32-bit `[tile:13–16 \| quantised depth:16–19]` | 4 B | 4 | Half the key memory and fewer passes; depth ties within a quantum → flicker |
+| Segmented sort (sort only depth, within tile segments) | 4 B | varies | Needs segment offsets first; CUB's segmented sort is fast for many small segments, worse for a few huge ones |
+
+### Footprint (radius) estimate
+
+| Option | Tiles per Gaussian | Cost |
+|---|---|---|
+| **3σ circle of the major axis** (chosen; reference) | Most | Trivial |
+| Opacity-aware radius ([§1.5](#15-dilation-conic-radius)) | Fewer for faint splats | One `log` per Gaussian |
+| Exact ellipse–tile intersection (later optimised rasterizers test each candidate tile) | Fewest, especially for thin ellipses | Per-tile test in duplicate; the count and write passes must use the same test |
+
+### Render kernel work decomposition
+
+| Option | Pros | Cons |
+|---|---|---|
+| **1 thread = 1 pixel, 1 block = 1 tile** (chosen) | Simple; matches the reference | Threads whose pixels finish early idle until the block votes done; heavy tiles serialise |
+| 1 thread = several pixels (e.g. 2×2) | Shared-memory loads amortised over more pixels; fewer blocks | More registers; divergence within a thread's pixels |
+| Split heavy tiles across multiple blocks, then merge | Load balance for dense regions | A merge pass, because compositing is order-dependent: you must merge (C, T) pairs in order. The maths works: `C = C₁ + T₁·C₂`, `T = T₁·T₂` |
+| Warp-per-tile with warp-level primitives | Fewer barriers (`__syncwarp`) | Only 32 pixels per tile, or more pixels per thread |
+
+The (C, T) merge formula in the third row is worth remembering. It shows that front-to-back compositing is *associative*, which is why parallel and segmented compositing is possible at all.
+
+### Library vs hand-written primitives
+
+| Option | Pros | Cons |
+|---|---|---|
+| **CUB** (chosen) | Fastest available; explicit temp storage (fits the grow-only policy); stream parameter | Verbose two-call API (size query, then run) |
+| Thrust (`thrust::sort_by_key`, `inclusive_scan`) | One-liners | **Allocates temporary storage internally on every call** unless you pass a custom allocator through an execution policy, which reintroduces hidden per-frame `cudaMalloc` |
+| Hand-written scan/sort | The deepest learning about GPU algorithms | Weeks of work to match CUB; correctness risk. Do it as a separate exercise and compare against CUB in a test |
+
+### Reuse vs write
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Write the rasterizer yourself, using the reference as a spec** (chosen) | The point of the project | Time |
+| Vendor `diff-gaussian-rasterization` / gsplat kernels | Working on day one | PyTorch-oriented interfaces; you'd learn integration, not the algorithm |
+| **Use the reference as an oracle only** (recommended in addition) | Render the same camera with the official renderer (Python) and diff the images | Needs a Python/PyTorch environment; see [06 Alternatives](06-roadmap-testing-profiling.md#alternatives--trade-offs) |

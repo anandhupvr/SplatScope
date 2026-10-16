@@ -31,6 +31,8 @@ N = number of Gaussians. L = number of (Gaussian, tile) *instances*, which chang
 
 ## Documents (read in this order)
 
+Each document ends with an **Alternatives & trade-offs** section: the other designs considered, how they compare, and when you would switch.
+
 | # | Document | What it answers |
 |---|---|---|
 | 01 | [Code review](01-code-review.md) | What is wrong or risky in the current branch, with severity, the failure mode and the fix |
@@ -54,6 +56,27 @@ These are the issues that currently prevent a correct image. Details and fixes a
 6. **The low-pass dilation is multiplied, not added.** `cov2d.x * 0.3f` should be `cov2d.x + 0.3f`. The eigenvalues also use the un-dilated matrix while `det` uses the dilated one (`gaussian_pipeline.cu:110-125`).
 7. **The view matrix is a reflection (det = −1).** The image only looks right because OpenGL's bottom-up texture rows flip it back (`camera.cpp:124-126`).
 8. **Binning buffers are `cudaMalloc`/`cudaFree`d every frame.** `free_scene` also leaks `d_cov3d`, and `free_scratch` leaks the CUB temp buffer.
+
+---
+
+## Whole-system alternatives (before committing to the plan)
+
+There are three credible ways to build a Gaussian-splatting viewer. They differ in *where the sorting happens* and *who does the blending*: your own compute kernels, or the GPU's fixed-function graphics pipeline.
+
+| | **A. CUDA tile rasterizer + GL present** (this plan) | **B. Graphics-pipeline splatting** (GL/Vulkan instanced quads) | **C. Ray-traced Gaussians** (OptiX/Vulkan RT) |
+|---|---|---|---|
+| How it works | Preprocess → tile/depth keys → radix sort → one block per tile composites front-to-back in a compute kernel | Sort Gaussians by depth (compute shader or CPU) → draw one camera-facing quad per Gaussian → the fragment shader evaluates the 2D Gaussian → fixed-function blending, back-to-front | Proxy geometry per Gaussian in a BVH; each ray collects hits in depth order and composites |
+| Ordering correctness | Per-tile, by centre depth (same approximation as the paper) | Global, by centre depth (same approximation) | Per-ray hit order (more correct, no popping) |
+| Early termination | Yes (T < 1e-4) | No: every covered fragment is blended (overdraw) | Yes |
+| What you learn | CUDA memory model, scans, radix sort, shared memory, barriers, interop | Graphics pipeline, blending equations, instancing, GLSL, compute-shader sorting | BVHs, RT pipelines, any-hit shaders |
+| Matches the paper's rasterizer | Exactly (images comparable to training renders) | Close; differs in blending precision and the per-tile vs global sort | Different algorithm |
+| Portability | NVIDIA only | Any GPU, even WebGL (this is how most web viewers work) | RT-capable GPUs; very complex |
+| Amount of code | Medium | Low–medium | High |
+| Fits the current codebase | Yes, it continues the `gpu_renderer` branch | Would replace the CUDA work | No |
+
+**Recommendation: A.** It's what you've started, it matches the reference algorithm exactly (so you can compare against training renders), and it teaches the CUDA and C++ ownership material you asked for. **B is the best *second* backend:** it reuses the same `HostScene`, `Camera` and `Presenter`. Implementing it after A makes the trade-off between fixed-function blending and a compute rasterizer concrete, which is a strong interview story. C is out of scope for a learning viewer.
+
+Every document below ends with an **Alternatives & trade-offs** section for its own decisions.
 
 ---
 

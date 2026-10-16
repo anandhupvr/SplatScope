@@ -295,3 +295,56 @@ Three small value types cross the `IRenderer` boundary, and **nothing else does*
 - **`FrameStats`** (returned): `num_gaussians`, `num_visible`, `num_instances (L)`, per-stage milliseconds (from CUDA events), and a status.
 
 These three types are what make the backends interchangeable *and* comparable: the CPU and GPU renderers receive identical inputs and report the same statistics.
+
+---
+
+## 9. Alternatives & trade-offs
+
+### 9.1 How the backends are abstracted
+
+| Option | Shape | Pros | Cons | When to pick |
+|---|---|---|---|---|
+| **Virtual interface** `IRenderer` (chosen) | `unique_ptr<IRenderer>`, runtime dispatch | Runtime CPU⇄GPU toggle; backends compile independently; the vtable costs one indirect call *per frame* | Heap allocation; virtual calls can't be inlined (irrelevant at 1 call/frame) | Open set of backends, runtime switching |
+| `std::variant<CpuRenderer, GpuRenderer>` + `std::visit` | Value semantics, no heap | No virtual calls; closed set checked at compile time | Every alternative must be a *complete type* where the variant is declared, so the CUDA backend's type leaks into the app (needs PIMPL anyway); adding a backend edits the variant | Small closed set, and you want value semantics |
+| Compile-time policy (`Viewer<Backend>`, CRTP) | Template parameter | Zero overhead; everything inlinable | No runtime toggle (two binaries); templates spread through the app layer | Hot inner loops. Not this boundary |
+| Runtime-loaded plugin (`dlopen`) | Each backend in a `.so` | The app runs without CUDA installed | ABI discipline, packaging, symbol visibility | Shipping software, not a learning viewer |
+
+**Rule of thumb:** use virtual dispatch at *coarse* boundaries (per frame, per scene) and templates at *fine* ones (per pixel, per Gaussian). The frame boundary is as coarse as it gets.
+
+### 9.2 Splitting the GPU pipeline into code units
+
+| Option | Description | Pros | Cons |
+|---|---|---|---|
+| **Monolithic `forward()` + buffers grouped by lifetime** (chosen) | One `Impl::render()` calls the stage launchers in order; buffers live in `SceneBuffers`/`GeometryBuffers`/`BinningBuffers`/`ImageBuffers` | The data flow reads top to bottom in one function; ownership follows lifetime, so no cross-stage borrowing | One function knows every stage |
+| Stage objects (`Preprocessor`, `Binner`, `TileRenderer`), each owning its buffers | OO pipeline | Each stage can be unit-tested in isolation | **Ownership by stage fights data flow:** `mean2d` is produced by preprocess but read by duplicate *and* render, so stages end up borrowing each other's internals and the lifetimes couple |
+| Render graph / frame graph | Declare passes plus the resources they read and write; a scheduler orders passes and aliases transient memory | Automatic barriers and memory aliasing; how game engines scale to hundreds of passes | Large framework for 6 fixed passes; hides exactly the details you want to learn |
+| Reference style: static functions + one memory chunk carved by `obtain()` | What `diff-gaussian-rasterization` does | Fits a framework allocator (PyTorch) | Untyped; overruns invisible to memcheck ([03 §2](03-memory-and-data-movement.md#2-allocation-policy-per-class)) |
+
+**The insight in this table:** group ownership by **lifetime** (what changes when), not by **producer** (who writes it). A buffer has one lifetime but several readers.
+
+### 9.3 Threading model
+
+| Option | Pros | Cons |
+|---|---|---|
+| **Single thread** (chosen) | Every ordering question can be answered by reading the code; GL context stays on one thread | The CPU waits during the L readback and the GPU waits during the CPU's event handling (both small) |
+| Main thread (events/UI) + render thread (GL + CUDA) | UI stays responsive during long frames | GL context must be moved to the render thread; GLFW event polling **must** stay on the main thread (required on macOS); camera state now needs synchronisation |
+| Frame pipelining (N+1 preprocess overlaps N present) | Hides the sync bubble; higher throughput | Double-buffered per-frame resources, events between frames, one frame of latency; much harder to debug |
+
+### 9.4 Presentation API
+
+| Option | Pros | Cons |
+|---|---|---|
+| **OpenGL + CUDA-GL interop** (chosen) | Already in the codebase; simple interop API | Legacy API; interop is implicitly synchronised; no macOS CUDA anyway |
+| Vulkan + CUDA external memory (`cudaImportExternalMemory`, `cudaImportExternalSemaphore`) | Explicit sync with semaphores; the modern path for production viewers | ~10× the boilerplate before the first pixel |
+| **Headless** (no window; write PNG/EXR per pose) | Simplest possible test harness; works over SSH and in CI | No interactivity. Keep it *in addition*, as the golden-image test driver |
+| Dear ImGui `Image()` on the GL texture | Debug panels, sliders for `RenderSettings`, stage-timing plots almost for free | One more dependency |
+
+### 9.5 Who owns the host scene
+
+| Option | Pros | Cons |
+|---|---|---|
+| **`shared_ptr<const HostScene>`** (chosen) | Lifetime safety without a contract; immutability in the type | Atomic refcount (irrelevant here); "shared" can become a habit that hides real ownership |
+| `Viewer` owns it uniquely; renderers get `const HostScene&` | Single owner, no refcount | Renderers holding the reference depend on member order in `Viewer`: today's raw-pointer hazard, just spelled differently |
+| Each renderer copies what it needs | Zero coupling | 2× host memory with both backends alive |
+
+Note that the GPU renderer already uses the third option implicitly: it copies to the device and keeps nothing. Only the CPU oracle needs shared ownership.
