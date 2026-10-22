@@ -178,7 +178,7 @@ The GPU's copy engine is a DMA device. It reads *physical* memory directly and n
 
 **Alternative (texture path):** `cudaGraphicsGLRegisterImage` on the texture, map it, get a `cudaArray_t`, create a `cudaSurfaceObject_t`, and write with `surf2Dwrite`. This skips the PBO→texture copy, but the kernel writes through the surface API (byte-addressed x coordinate, a gotcha) instead of plain pointers. Do the PBO version first.
 
-**Device-selection gotcha:** interop only works if CUDA runs on the same GPU that owns the GL context. Before any other CUDA call, use `cudaGLGetDevices(&count, devs, 1, cudaGLDeviceListAll)` and `cudaSetDevice(devs[0])`. On hybrid-graphics laptops (GL on the integrated GPU), registration fails or silently routes through host memory. That's one of the open questions in the [README](README.md#decisions-this-plan-assumes-and-open-questions). Keep Phase A as the fallback, selected at runtime.
+**Device-selection gotcha:** interop only works if CUDA runs on the same GPU that owns the GL context. Before any other CUDA call, use `cudaGLGetDevices(&count, devs, 1, cudaGLDeviceListAll)` and `cudaSetDevice(devs[0])`. On hybrid-graphics laptops (GL on the integrated GPU), registration fails or silently routes through host memory. Your GF63 is exactly this case; see [07 §1.2](07-platform-and-resolved-decisions.md#12-hybrid-graphics-optimus-who-owns-the-screen) for making GL run on the NVIDIA GPU with PRIME offload. Keep Phase A as the fallback, selected at runtime.
 
 ---
 
