@@ -20,15 +20,15 @@ __device__ inline float3 world_to_camera(float4 p, const float* __restrict__ vie
     return make_float3(x * inv_w, y * inv_w, z * inv_w);
 }
 
-// computing covarience 3d
-// J * E3d * J^T
-__device__ inline float3 compute_cov3d_inv(const float* __restrict__ cov3d,
-                                           float3 cam,
-                                           const float* __restrict__ view,
-                                           float fx,
-                                           float fy) {
+// project the world-space 3D covariance to a 2D screen covariance: J * W * Σ * W^T * J^T
+// returns the symmetric 2x2 as {a, b, c} = [[a, b], [b, c]]
+__device__ inline float3 project_cov2d(const float* __restrict__ cov3d,
+                                       float3 cam,
+                                       const float* __restrict__ view,
+                                       float fx,
+                                       float fy) {
     // compute jacobian
-    float inv_z = 1.0 / cam.z;
+    float inv_z = 1.0f / cam.z;
     float inv_z2 = inv_z * inv_z;
 
     // padding row was padding(before this transpose)
@@ -73,7 +73,8 @@ __device__ inline float3 compute_cov3d_inv(const float* __restrict__ cov3d,
 
     // J * E3d * J^T
 
-    glm::mat3 cov2d_mat = glm::transpose(J) * sigma_cam * J;
+    // J above is the real Jacobian (glm takes columns), so J Σ J^T, not J^T Σ J
+    glm::mat3 cov2d_mat = J * sigma_cam * glm::transpose(J);
 
     /*
     [a, b, 0]

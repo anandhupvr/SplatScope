@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,18 @@
 
 namespace rasterizer {
 
+constexpr int TILE = 16;
+
+// Tiles covered by the square center ± radius, as [mn, mx) clamped to the grid.
+// The count pass and the write pass MUST both use this, or writes overflow into the next Gaussian's
+// slots.
+__device__ inline void get_tile_rect(float2 p, float r, dim3 grid, int2& mn, int2& mx) {
+    mn.x = min((int)grid.x, max(0, (int)floorf((p.x - r) / TILE)));
+    mn.y = min((int)grid.y, max(0, (int)floorf((p.y - r) / TILE)));
+    mx.x = min((int)grid.x, max(0, (int)floorf((p.x + r + TILE - 1) / TILE)));
+    mx.y = min((int)grid.y, max(0, (int)floorf((p.y + r + TILE - 1) / TILE)));
+}
+
 __global__ void duplicate_and_generate_keys(int N,
                                             const float* __restrict__ d_proj_xy,
                                             const float* __restrict__ d_radii,
@@ -31,34 +44,31 @@ __global__ void duplicate_and_generate_keys(int N,
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N)
         return;
-    if (d_radii[idx] > 0)
+    if (d_tiles_touched[idx] == 0)  // culled or off screen: owns no slots
         return;
 
+    // my slots are [offsets[idx-1], offsets[idx])
     uint32_t off = (idx == 0) ? 0 : d_point_offsets[idx - 1];
     float2 point = make_float2(d_proj_xy[2 * idx], d_proj_xy[2 * idx + 1]);
-    float radius = d_radii[idx];
 
-    // calculate tile range
-    int x_min = (int)floorf((point.x - radius) / tile_grid.x);
-    int x_max = (int)ceilf((point.x + radius) / tile_grid.x);
-    int y_min = (int)floorf((point.y - radius) / tile_grid.y);
-    int y_max = (int)ceilf((point.y + radius) / tile_grid.y);
-    float depth = d_depths[idx];
-    // generate keys and values for each touched tile
-    for (int y = y_min; y < y_max; y++) {
-        for (int x = x_min; x < x_max; x++) {
-            if (y < 0 || x < 0)
-                printf("error: negative tile index %d, %d\n", x, y);
-            //     continue;  later check if this is possible
+    int2 mn, mx;
+    get_tile_rect(point, d_radii[idx], tile_grid, mn, mx);
 
-            uint64_t key = y * tile_grid.x + x;
-            key <<= 32;
-            key |= (uint32_t)depth;  // gaussian id
-            d_keys_unsorted[off] = key;
+    // depth > near plane > 0, so its raw float bits sort in the same order as the float values
+    uint32_t depth_bits = __float_as_uint(d_depths[idx]);
+
+    // key = [ tile_id : 32 | depth bits : 32 ], value = gaussian id
+    for (int y = mn.y; y < mx.y; y++) {
+        for (int x = mn.x; x < mx.x; x++) {
+            uint64_t key = (uint64_t)(y * tile_grid.x + x) << 32;
+            d_keys_unsorted[off] = key | depth_bits;
             d_vals_unsorted[off] = idx;
             off++;
         }
     }
+    assert(
+        off ==
+        (uint32_t)d_point_offsets[idx]);  // wrote exactly tiles_touched[idx] entries (Debug only)
 }
 
 __global__ void project_gaussians(int N,
@@ -77,70 +87,66 @@ __global__ void project_gaussians(int N,
                                   float4* d_conic_opacities,
                                   uchar4* d_framebuf,
                                   int W,
-                                  int H) {
+                                  int H,
+                                  dim3 tile_grid) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= N)
         return;
 
-    // float4 p = make_float4(d_means[3 * idx], d_means[3 * idx + 1], d_means[3 * idx + 2], 0);
+    // Write these BEFORE any early return: the prefix sum reads all N slots every frame,
+    // and cudaMalloc memory is garbage / last frame's values otherwise.
+    d_radii[idx] = 0;
+    d_tiles_touched[idx] = 0;
+
     float4 p = reinterpret_cast<const float4*>(d_means)[idx];
     float3 cam = gmath::world_to_camera(p, d_view);
 
-    if (cam.z < 0.2f)
+    if (cam.z < 0.2f)  // near plane
         return;
 
+    // keep subpixel precision; don't cull on the center, a big splat centered off-screen still
+    // overlaps it
     float inv_z = 1.0f / cam.z;
-    int u = (int)(fx * cam.x * inv_z + cx);
-    int v = (int)(fy * cam.y * inv_z + cy);
+    float u = fx * cam.x * inv_z + cx;
+    float v = fy * cam.y * inv_z + cy;
 
-    if (u < 0 || u >= W || v < 0 || v >= H)
-        return;
+    float3 cov2d = gmath::project_cov2d(d_cov3d + 6 * idx, cam, d_view, fx, fy);
 
-    d_means2d[2 * idx] = (float)u;
-    d_means2d[2 * idx + 1] = (float)v;
-    d_depths[idx] = cam.z;
-
-    auto const cov3d_i = d_cov3d + 6 * idx;
-
-    /// covarience3d already provided from cpu, later port it to gpu here
-    float3 cov2d = gmath::compute_cov3d_inv(cov3d_i, cam, d_view, fx, fy);
-
-    // // calculate inv
-    // // regularization(prevents singular mat on inversion)
-    float a = cov2d.x * 0.3f;
+    // low-pass filter: ADD 0.3 px² (convolving two Gaussians adds covariances); also keeps it
+    // invertible
+    float a = cov2d.x + 0.3f;
     float b = cov2d.y;
     float c = cov2d.z + 0.3f;
 
-    // // invert 2x2 : [[a,b], [b, c]]^-1 = 1/ (ac - b^2) * [[c, -b], [-b, a]]
     float det = a * c - b * b;
-    float inv_det = 1.0f / (det + 1e-7f);
-    // conic as float3 {a', b', c'} = upper triangle of inverse
-    float3 cov2d_inv = make_float3(c * inv_det, -b * inv_det, a * inv_det);
+    if (det <= 0.0f)
+        return;
+    float inv_det = 1.0f / det;
 
-    // approximate gaussian (circle)
-    float mid = 0.5f * (cov2d.x + cov2d.z);  // (a+c)/2
-    float disc = sqrtf(fmaxf(0.0f, mid * mid - det));
-    float lambda1 = mid + disc;  // larger eigenvalue
-    float lambda2 = mid - disc;  // smaller eigenvalue
-    float radius = ceil(3.f * sqrt(max(lambda1, lambda2)));
+    // radius = 3 sigma along the longest axis = 3 * sqrt(largest eigenvalue) of the SAME (dilated)
+    // matrix
+    float mid = 0.5f * (a + c);
+    float lambda1 = mid + sqrtf(fmaxf(0.0f, mid * mid - det));
+    float radius = ceilf(3.0f * sqrtf(lambda1));
 
-    // assumming tile size 16x16
-    int tW = (int)ceilf((float)W / 16);
-    int tH = (int)ceilf((float)H / 16);
+    int2 mn, mx;
+    get_tile_rect(make_float2(u, v), radius, tile_grid, mn, mx);
+    int tiles = (mx.x - mn.x) * (mx.y - mn.y);
+    if (tiles == 0)  // entirely off screen
+        return;
 
-    int tile_min_x = max(0, (int)floorf((u - radius) / 16.0f));
-    int tile_max_x = min(tW, (int)ceilf((u + radius) / 16.0f));
-    int tile_min_y = max(0, (int)floorf((v - radius) / 16.0f));
-    int tile_max_y = min(tH, (int)ceilf((v + radius) / 16.0f));
-
-    d_tiles_touched[idx] = (tile_max_x - tile_min_x) * (tile_max_y - tile_min_y);
+    d_means2d[2 * idx] = u;
+    d_means2d[2 * idx + 1] = v;
+    d_depths[idx] = cam.z;
     d_radii[idx] = radius;
+    d_tiles_touched[idx] = tiles;
+    // conic = inverse 2D covariance [[c, -b], [-b, a]] / det, packed with opacity for the render
+    // kernel
+    d_conic_opacities[idx] = make_float4(c * inv_det, -b * inv_det, a * inv_det, d_opacity[idx]);
 
-    // conic selection equation
-    d_conic_opacities[idx] = make_float4(cov2d_inv.x, cov2d_inv.y, cov2d_inv.z, d_opacity[idx]);
-
-    // write white dot to framebuffer ** this is per thread write !!!!!
-    d_framebuf[v * W + u] = make_uchar4(255, 255, 255, 255);
+    // debug view until the render kernel exists: white dot at the center
+    if (u >= 0 && u < W && v >= 0 && v < H)
+        d_framebuf[(int)v * W + (int)u] = make_uchar4(255, 255, 255, 255);
 }
 
 void upload(SceneBuffers& scene,
@@ -193,6 +199,7 @@ void forward(const SceneBuffers& scene,
 
     dim3 block(256);
     dim3 grid((scene.N + block.x - 1) / block.x);
+    dim3 tile_grid((scratch.width + TILE - 1) / TILE, (scratch.height + TILE - 1) / TILE, 1);
 
     project_gaussians<<<grid, block>>>(scene.N,
                                        static_cast<const float*>(scene.d_means),
@@ -210,8 +217,9 @@ void forward(const SceneBuffers& scene,
                                        static_cast<float4*>(scratch.d_conic_opacities),
                                        static_cast<uchar4*>(scratch.d_framebuf),  // debug/test
                                        scratch.width,
-                                       scratch.height);
-    cudaDeviceSynchronize();
+                                       scratch.height,
+                                       tile_grid);
+    CUDA_CHECK(cudaGetLastError());  // bad launch config; execution errors surface at the next sync
 
     // prefix sum
     // tiles_touched [3,3,1,0,2] -> point_offset [3, 6, 7, 7, 9]
@@ -220,14 +228,12 @@ void forward(const SceneBuffers& scene,
     CUDA_CHECK(cub::DeviceScan::InclusiveSum(
         scratch.d_cub_temp, scratch.d_cub_temp_bytes, d_in, d_out, scene.N));
 
-    // will be used for rendering kernel
-    dim3 tile_grid((scratch.width + 15) / 16, (scratch.height + 15) / 16, 1);
-
+    // L = last offset = total (tile, gaussian) pairs. Blocking copy, so it also waits for the work above.
     int L = 0;
-    cudaMemcpy(&L,
-               static_cast<int*>(scratch.d_point_offsets) + scene.N - 1,
-               sizeof(int),
-               cudaMemcpyDeviceToHost);
+    CUDA_CHECK(cudaMemcpy(&L,
+                          static_cast<int*>(scratch.d_point_offsets) + scene.N - 1,
+                          sizeof(int),
+                          cudaMemcpyDeviceToHost));
     printf("total points to rasterize: %d : gaussian count : %d\n ", L, scene.N);
 
     CUDA_CHECK(cudaMalloc(&scratch.d_keys_unsorted, L * sizeof(uint64_t)));
@@ -248,6 +254,7 @@ void forward(const SceneBuffers& scene,
                                                  static_cast<uint64_t*>(scratch.d_keys_unsorted),
                                                  static_cast<uint32_t*>(scratch.d_vals_unsorted),
                                                  tile_grid);
+    CUDA_CHECK(cudaGetLastError());
 
     // dummy
     // CUDA_CHECK(cub::DeviceRadixSort::SortPairs(nullptr,
@@ -313,7 +320,9 @@ void free_scratch(ScratchBuffers& scratch) {
     cudaFree(scratch.d_radii);
     cudaFree(scratch.d_conic_opacities);
     cudaFree(scratch.d_framebuf);
+    cudaFree(scratch.d_cub_temp);
 
+    scratch.d_cub_temp = nullptr;
     scratch.d_proj_xy = nullptr;
     scratch.d_depths = nullptr;
     scratch.d_viewmat = nullptr;
@@ -330,6 +339,8 @@ void free_scene(SceneBuffers& scene) {
     cudaFree(scene.d_rotations);
     cudaFree(scene.d_colors);
     cudaFree(scene.d_opacities);
+    cudaFree(scene.d_cov3d);
+    scene.d_cov3d = nullptr;
     scene.d_means = nullptr;
     scene.d_scales = nullptr;
     scene.d_rotations = nullptr;
