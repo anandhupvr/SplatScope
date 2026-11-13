@@ -22,8 +22,12 @@ struct ScratchBuffers {
     void* d_point_offsets = nullptr;
     void* d_cub_temp = nullptr;  // temporary buffer for cub::DeviceScan
     size_t d_cub_temp_bytes = 0;
+    void* d_sort_temp = nullptr;
+    size_t d_sort_temp_bytes = 0;
     void* d_framebuf = nullptr;
     int width, height;
+
+    void* d_tile_ranges =  nullptr;
 
     // bining
     void* d_keys_unsorted = nullptr;

@@ -68,6 +68,6 @@ void GpuRenderer::render(const Camera& cam) {
                         intrinsic.cy,
                         frame_buf_.mutable_data());
 
-    display_.show(frame_buf_);
+    display_.show(frame_buf_); // need an interop later
     // cudaMemcpy D->H-> glTexSubImage2D -> draw quad
 }

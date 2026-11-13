@@ -1,7 +1,10 @@
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <vector>
 
 #include <cub/cub.cuh>
 #include <cub/device/device_radix_sort.cuh>
@@ -11,6 +14,7 @@
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 #include <vector_functions.h>
+#include <vector_types.h>
 
 // #include <glm/glm.hpp>
 
@@ -149,6 +153,122 @@ __global__ void project_gaussians(int N,
         d_framebuf[(int)v * W + (int)u] = make_uchar4(255, 255, 255, 255);
 }
 
+__global__ void identify_tile_ranges(int L, const uint64_t* keys_sorted, uint2* ranges)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= L)
+        return;
+
+    uint32_t tile = keys_sorted[idx] >> 32;
+    if (idx == 0){
+        ranges[tile].x = 0;
+    }
+    else {
+        uint32_t prev = keys_sorted[idx - 1] >> 32;
+        if (tile != prev) {
+            ranges[prev].y = idx;
+            ranges[tile].x = idx;
+        }
+    } 
+    if (idx == L -1 ){
+        ranges[tile].y = L;
+    }
+}
+
+constexpr int BLOCK_SIZE = TILE * TILE;  // 256 threads: one per pixel of a tile
+
+// Block = tile, thread = pixel. Each thread blends its tile's depth-sorted list front to back.
+// The list is fetched in batches of BLOCK_SIZE into shared memory, one entry per thread, so each
+// entry is read from global memory once per block instead of once per pixel.
+__global__ void __launch_bounds__(BLOCK_SIZE)
+    render_tiles(const uint2* __restrict__ ranges,
+                 const uint32_t* __restrict__ point_list,
+                 const float2* __restrict__ xy,
+                 const float4* __restrict__ conic_opacity,
+                 const float* __restrict__ colors,  // 3 floats (rgb) per Gaussian
+                 int W,
+                 int H,
+                 float3 background,
+                 uchar4* __restrict__ out) {
+    // who am I
+    const int px = blockIdx.x * TILE + threadIdx.x;
+    const int py = blockIdx.y * TILE + threadIdx.y;
+    const int tile = blockIdx.y * gridDim.x + blockIdx.x;
+    const int rank = threadIdx.y * TILE + threadIdx.x;  // 0 .. 255, slot this thread loads
+    const bool inside = px < W && py < H;               // bottom tile row hangs off screen
+    const float2 pix = make_float2((float)px, (float)py);
+
+    // my tile's slice of the sorted list (same address for all 256 threads -> broadcast)
+    const uint2 range = ranges[tile];
+
+    __shared__ uint32_t s_id[BLOCK_SIZE];
+    __shared__ float2 s_xy[BLOCK_SIZE];
+    __shared__ float4 s_co[BLOCK_SIZE];
+
+    // NO early return from here on: every thread must reach every barrier.
+    // Off-screen threads start "done": they help load but skip the blending.
+    bool done = !inside;
+    float T = 1.0f;  // transmittance: how much light still gets through
+    float3 C = make_float3(0.0f, 0.0f, 0.0f);
+
+    // range is the same for the whole block, so every thread runs the same number of rounds
+    for (uint32_t base = range.x; base < range.y; base += BLOCK_SIZE) {
+        // barrier + count: if every pixel is saturated, the whole block leaves together.
+        // Also acts as the "finished reading the previous batch" barrier before we overwrite it.
+        if (__syncthreads_count(done) == BLOCK_SIZE)
+            break;
+
+        // cooperative load: thread `rank` fetches entry base + rank (coalesced on point_list)
+        const uint32_t i = base + rank;
+        if (i < range.y) {
+            const uint32_t g = point_list[i];
+            s_id[rank] = g;
+            s_xy[rank] = xy[g];
+            s_co[rank] = conic_opacity[g];
+        }
+        __syncthreads();  // batch fully loaded before anyone reads it
+
+        if (!done) {
+            const int count = min(BLOCK_SIZE, (int)(range.y - base));
+            for (int j = 0; j < count; j++) {
+                const float2 d = make_float2(pix.x - s_xy[j].x, pix.y - s_xy[j].y);
+                const float4 co = s_co[j];  // (conic a, conic b, conic c, opacity)
+                const float power = -0.5f * (co.x * d.x * d.x + co.z * d.y * d.y) - co.y * d.x * d.y;
+                if (power > 0.0f)
+                    continue;
+
+                const float alpha = fminf(0.99f, co.w * __expf(power));
+                if (alpha < 1.0f / 255.0f)
+                    continue;
+
+                const float T_next = T * (1.0f - alpha);
+                if (T_next < 1e-4f) {  // saturated: nothing behind can show through
+                    done = true;
+                    break;
+                }
+
+                // color is only fetched for Gaussians that actually contribute
+                const uint32_t g = s_id[j];
+                const float w = alpha * T;
+                C.x += colors[3 * g + 0] * w;
+                C.y += colors[3 * g + 1] * w;
+                C.z += colors[3 * g + 2] * w;
+                T = T_next;
+            }
+        }
+    }
+
+    if (inside) {
+        const float r = fminf(fmaxf(C.x + T * background.x, 0.0f), 1.0f);
+        const float g = fminf(fmaxf(C.y + T * background.y, 0.0f), 1.0f);
+        const float b = fminf(fmaxf(C.z + T * background.z, 0.0f), 1.0f);
+        out[py * W + px] = make_uchar4((unsigned char)(r * 255.0f + 0.5f),
+                                       (unsigned char)(g * 255.0f + 0.5f),
+                                       (unsigned char)(b * 255.0f + 0.5f),
+                                       255);
+    }
+}
+
 void upload(SceneBuffers& scene,
             const float* h_means,
             const float* h_scales,
@@ -234,12 +354,31 @@ void forward(const SceneBuffers& scene,
                           static_cast<int*>(scratch.d_point_offsets) + scene.N - 1,
                           sizeof(int),
                           cudaMemcpyDeviceToHost));
-    printf("total points to rasterize: %d : gaussian count : %d\n ", L, scene.N);
+    // printf("total points to rasterize: %d : gaussian count : %d\n ", L, scene.N);
 
-    CUDA_CHECK(cudaMalloc(&scratch.d_keys_unsorted, L * sizeof(uint64_t)));
-    CUDA_CHECK(cudaMalloc(&scratch.d_vals_unsorted, L * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMalloc(&scratch.d_keys_sorted, L * sizeof(uint64_t)));
-    CUDA_CHECK(cudaMalloc(&scratch.d_point_list, L * sizeof(uint32_t)));
+    // nothing on screen: skip binning (a <<<0, 256>>> launch would be an invalid configuration)
+    if (L == 0) {
+        CUDA_CHECK(cudaMemcpy(frame_buf,
+                              scratch.d_framebuf,
+                              (size_t)scratch.width * scratch.height * sizeof(uchar4),
+                              cudaMemcpyDeviceToHost));
+        return;
+    }
+
+    // grow only: buffers live across frames, realloc only when this frame needs more than we have
+    if (L > scratch.L_max) {
+        cudaFree(scratch.d_keys_unsorted);
+        cudaFree(scratch.d_vals_unsorted);
+        cudaFree(scratch.d_keys_sorted);
+        cudaFree(scratch.d_point_list);
+
+        const int cap = L + L / 2;  // 50% headroom so small camera moves don't realloc
+        CUDA_CHECK(cudaMalloc(&scratch.d_keys_unsorted, cap * sizeof(uint64_t)));
+        CUDA_CHECK(cudaMalloc(&scratch.d_vals_unsorted, cap * sizeof(uint32_t)));
+        CUDA_CHECK(cudaMalloc(&scratch.d_keys_sorted, cap * sizeof(uint64_t)));
+        CUDA_CHECK(cudaMalloc(&scratch.d_point_list, cap * sizeof(uint32_t)));
+        scratch.L_max = cap;
+    }
 
     // keygeneration (unsorted)
     // eg : keys[t1|3.1, t2|2.0, t3|4.2....]
@@ -255,28 +394,80 @@ void forward(const SceneBuffers& scene,
                                                  static_cast<uint32_t*>(scratch.d_vals_unsorted),
                                                  tile_grid);
     CUDA_CHECK(cudaGetLastError());
+    // faster, tell CUB to ignore bits that are not needed
+    // 58x38 = 1900 tiles which is 21bits others are always zero
+    int num_tiles = tile_grid.x * tile_grid.y;
+    int tile_bits = 0;
+    while ((1u << tile_bits) < (unsigned)num_tiles) tile_bits++;
+    int end_bit = 32 + tile_bits;  // sort bits [0, 32 + tile_bits]
 
-    // dummy
-    // CUDA_CHECK(cub::DeviceRadixSort::SortPairs(nullptr,
-    //                                            scratch.d_cub_temp_bytes,
-    //                                            (const uint64_t*)nullptr,
-    //                                            (uint64_t*)nullptr,
-    //                                            (const uint32_t*)nullptr,
-    //                                            (uint32_t*)nullptr,
-    //                                            scene.N * 16));
+    // query size
+    size_t sort_bytes = 0;
+    CUDA_CHECK(cub::DeviceRadixSort::SortPairs(
+        nullptr, sort_bytes,                                          // nullptr - tell me the size
+        static_cast<const uint64_t*>(scratch.d_keys_unsorted),
+        static_cast<uint64_t*>(scratch.d_keys_sorted),
+        static_cast<const uint32_t*>(scratch.d_vals_unsorted),
+        static_cast<uint32_t*>(scratch.d_point_list),
+        L, 0, end_bit));
 
-    // actual sorting
+    if (sort_bytes > scratch.d_sort_temp_bytes) {                // grow only, never shrink
+        cudaFree(scratch.d_sort_temp);
+        CUDA_CHECK(cudaMalloc(&scratch.d_sort_temp, sort_bytes));
+        scratch.d_sort_temp_bytes = sort_bytes;
+    }
+    // do the sort
+    CUDA_CHECK(cub::DeviceRadixSort::SortPairs(
+        scratch.d_sort_temp, scratch.d_sort_temp_bytes,         // ← real buffer = "do it"
+        static_cast<const uint64_t*>(scratch.d_keys_unsorted),  // keys in
+        static_cast<uint64_t*>(scratch.d_keys_sorted),          // keys out
+        static_cast<const uint32_t*>(scratch.d_vals_unsorted),  // values in  (Gaussian IDs)
+        static_cast<uint32_t*>(scratch.d_point_list),           // values out (Gaussian IDs, sorted)
+        L,                                                      // number of pairs
+        0, end_bit));                                           // which key bits to sort on
 
-    cudaMemcpy(frame_buf,
-               scratch.d_framebuf,
-               (size_t)scratch.width * scratch.height * 4,
-               cudaMemcpyDeviceToHost);
-    // cudaFree(scratch.d_cub_temp); // check this again
+    // find each tile's slice of the list - Tile ranges
+    // clear every frame: tiles with no entries are never written by the kernel, they must read [0, 0)
+    CUDA_CHECK(cudaMemset(scratch.d_tile_ranges, 0, num_tiles * sizeof(uint2)));
+    
+    identify_tile_ranges<<<(L + 255) / 256, 256>>>(
+        L,
+        static_cast<const uint64_t*>(scratch.d_keys_sorted),
+        static_cast<uint2*>(scratch.d_tile_ranges));
+    CUDA_CHECK(cudaGetLastError());
 
-    cudaFree(scratch.d_keys_unsorted);
-    cudaFree(scratch.d_vals_unsorted);
-    cudaFree(scratch.d_keys_sorted);
-    cudaFree(scratch.d_point_list);
+    // render: block = tile, thread = pixel; writes every on-screen pixel of the framebuffer
+    render_tiles<<<tile_grid, dim3(TILE, TILE)>>>(
+        static_cast<const uint2*>(scratch.d_tile_ranges),
+        static_cast<const uint32_t*>(scratch.d_point_list),
+        static_cast<const float2*>(scratch.d_proj_xy),
+        static_cast<const float4*>(scratch.d_conic_opacities),
+        static_cast<const float*>(scene.d_colors),
+        scratch.width,
+        scratch.height,
+        make_float3(0.0f, 0.0f, 0.0f),  // black background
+        static_cast<uchar4*>(scratch.d_framebuf));
+    CUDA_CHECK(cudaGetLastError());
+
+    // debug
+    // std::vector<uint64_t> k(std::min(L, 20));
+    // cudaMemcpy(k.data(), scratch.d_keys_sorted, k.size() * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+    // for (auto key : k) {
+    //     uint32_t tile = key >> 32;
+    //     uint32_t dbits = key & 0xFFFFFFFF;
+    //     float depth; memcpy(&depth, &dbits, 4);
+    //     printf("tile %u  depth %.3f\n", tile, depth);
+    // }
+
+
+
+    // blocking copy: also where errors from inside the kernels above would surface
+    CUDA_CHECK(cudaMemcpy(frame_buf,
+                          scratch.d_framebuf,
+                          (size_t)scratch.width * scratch.height * sizeof(uchar4),
+                          cudaMemcpyDeviceToHost));
+
+
 }
 
 void alloc_scratch(ScratchBuffers& scratch, int N, int W, int H) {
@@ -296,17 +487,9 @@ void alloc_scratch(ScratchBuffers& scratch, int N, int W, int H) {
     CUDA_CHECK(cudaMalloc(&scratch.d_cub_temp, temp_bytes));
     scratch.d_cub_temp_bytes = temp_bytes;
 
-    // bining
-    // worst case 16 tiles per gaussain
-    // const int K = 16;
-    // const int max_L = N * K;
-    // scratch.L_max = max_L;
-    // CUDA_CHECK(cudaMalloc(&scratch.d_keys_unsorted, max_L * sizeof(uint64_t)));
-    // CUDA_CHECK(cudaMalloc(&scratch.d_vals_unsorted, max_L * sizeof(uint32_t)));
-    // CUDA_CHECK(cudaMalloc(&scratch.d_keys_sorted, max_L * sizeof(uint64_t)));
-    // CUDA_CHECK(cudaMalloc(&scratch.d_point_list, max_L * sizeof(uint32_t)));
-
-    // CUB radix sort - measure with dummpy data
+    // one [start, end) per tile; depends only on the screen size, so it can be allocated once here
+    const int num_tiles = ((W + TILE - 1) / TILE) * ((H + TILE - 1) / TILE);
+    CUDA_CHECK(cudaMalloc(&scratch.d_tile_ranges, num_tiles * sizeof(uint2)));
 
     CUDA_CHECK(cudaMalloc(&scratch.d_framebuf, (size_t)W * H * sizeof(uchar4)));
 }
@@ -321,6 +504,20 @@ void free_scratch(ScratchBuffers& scratch) {
     cudaFree(scratch.d_conic_opacities);
     cudaFree(scratch.d_framebuf);
     cudaFree(scratch.d_cub_temp);
+
+    cudaFree(scratch.d_tile_ranges);
+
+    cudaFree(scratch.d_keys_unsorted);
+    cudaFree(scratch.d_vals_unsorted);
+    cudaFree(scratch.d_keys_sorted);
+    cudaFree(scratch.d_point_list);
+    cudaFree(scratch.d_sort_temp);
+    scratch.d_keys_unsorted = scratch.d_vals_unsorted = nullptr;
+    scratch.d_keys_sorted = scratch.d_point_list = scratch.d_sort_temp = nullptr;
+    scratch.L_max = 0;
+    scratch.d_sort_temp_bytes = 0;
+
+    scratch.d_tile_ranges = nullptr;
 
     scratch.d_cub_temp = nullptr;
     scratch.d_proj_xy = nullptr;
