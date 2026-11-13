@@ -30,6 +30,8 @@ __device__ inline float3 project_cov2d(const float* __restrict__ cov3d,
     // compute jacobian
     float inv_z = 1.0f / cam.z;
     float inv_z2 = inv_z * inv_z;
+    // clamp the jacobina here 
+    // now its cover whole screen while zoon in, its growing with x/z !!!fix this
 
     // padding row was padding(before this transpose)
     glm::mat3 J = glm::mat3(fx * inv_z,

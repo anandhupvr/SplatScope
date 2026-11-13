@@ -2,6 +2,7 @@
 
 #include "Eigen/Core"
 #include "Eigen/Geometry"
+#include "Eigen/src/Core/Matrix.h"
 
 // namespace camera {
 
@@ -125,6 +126,7 @@ Eigen::Matrix4f Camera::view_matrix() const {
         forward.cross(Eigen::Vector3f(0.0f, -1.0f, 0.0f)).normalized();  // right
     Eigen::Vector3f up = right.cross(forward);                           // up
 
+    // something is wrong here !!!!! fix this
     Eigen::Matrix4f view = Eigen::Matrix4f::Identity();
     view.block<1, 3>(0, 0) = right.transpose();
     view.block<1, 3>(1, 0) = up.transpose();
