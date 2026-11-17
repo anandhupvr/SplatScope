@@ -15,9 +15,11 @@ void update_camera(Camera& cam, const InputState& in) {
     }
 
     // Right drag → pan
-    // if (in.mouse_right_down) {
-    //     cam.pan({in.mouse_dx * kPanSensitivity, in.mouse_dy * kPanSensitivity});
-    // }
+    if (in.mouse_right_down) {
+        // scale with distance so panning feels the same zoomed in or out
+        const float k = kPanSensitivity * cam.distance() * 0.1f;
+        cam.pan({static_cast<float>(in.mouse_dx) * k, static_cast<float>(in.mouse_dy) * k});
+    }
     // Scroll → zoom
     if (in.scroll_dy != 0.0) {
         // Negative scroll usually means "zoom in" — multiplicative

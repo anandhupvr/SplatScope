@@ -155,6 +155,8 @@ GaussianCloud load(const std::string& file_path) {
 
     auto poisitions = file.request_properties_from_element("vertex", {"x", "y", "z"});
     auto colors = file.request_properties_from_element("vertex", {"f_dc_0", "f_dc_1", "f_dc_2"});
+    // add — all 45 rest coefficients
+
     auto opacities = file.request_properties_from_element("vertex", {"opacity"});
     auto scales = file.request_properties_from_element("vertex", {"scale_0", "scale_1", "scale_2"});
     auto rotations =

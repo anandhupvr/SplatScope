@@ -1,4 +1,6 @@
 #pragma once
+#include <memory>
+
 #include "window/window.h"
 
 #include "renderer/renderer.h"

@@ -1,5 +1,7 @@
 #include "camera.h"
 
+#include <cmath>
+
 #include "Eigen/Core"
 #include "Eigen/Geometry"
 
@@ -15,7 +17,21 @@ Eigen::Matrix3f Instrinsic::as_matrix() const {
     return K;
 }
 
-Camera::Camera() : kWorldUp(0.0f, 1.0f, 0.0f), instrinsic_() {}
+Camera::Camera() : instrinsic_() {
+    set_world_up(world_up_);  // builds e1_, e2_ from the default up
+}
+
+void Camera::set_world_up(const Eigen::Vector3f& up) {
+    world_up_ = up.normalized();
+    Eigen::Vector3f helper =
+        std::abs(world_up_.x()) < 0.9f ? Eigen::Vector3f::UnitX() : Eigen::Vector3f::UnitZ();
+    e1_ = world_up_.cross(helper).normalized();  // on the floor
+    e2_ = world_up_.cross(e1_);                  // on the floor, perpendicular to e1_
+}
+
+Eigen::Vector3f Camera::world_up() const {
+    return world_up_;
+}
 
 void Camera::set_target(const Eigen::Vector3f& target) {
     target_ = target;
@@ -64,16 +80,11 @@ void Camera::zoom(float factor) {
 }
 
 void Camera::pan(const Eigen::Vector2f& screen_delta) {
-    // Reconstruct camera basis vectors in world frame
-    Eigen::Vector3f forward = (target_ - position()).normalized();
-    Eigen::Vector3f right = forward.cross(kWorldUp).normalized();
-    Eigen::Vector3f up = right.cross(forward);
-
-    // Convert screen delta into world-space shift
-    Eigen::Vector3f shift = right * screen_delta.x() + up * screen_delta.y();
-
-    // Apply shift to target (camera follows because position() depends on target)
-    target_ += shift;
+    Eigen::Vector3f right, down, forward;
+    axes(right, down, forward);
+    // screen x → camera right, screen y (grows downward) → camera down.
+    // Move the target opposite to the drag so the scene follows the cursor.
+    target_ -= right * screen_delta.x() + down * screen_delta.y();
 }
 
 void Camera::set_intrinic(const Instrinsic& intrinsic) {
@@ -89,45 +100,28 @@ Instrinsic Camera::intrinsic() const {
 }
 
 Eigen::Vector3f Camera::position() const {
-    // Convert spherical coordinates to Cartesian coordinates
-    // camera sits on a sphere with radius = distance_ , theta = yaw_ , phi = pitch_
-    float x = distance_ * cos(pitch_) * sin(yaw_);
-    float y = distance_ * sin(pitch_);
-    float z = distance_ * cos(pitch_) * cos(yaw_);
-
-    return Eigen::Vector3f(x, y, z) + target_;
+    // yaw picks a direction on the floor (walking around the turntable)
+    Eigen::Vector3f h = std::sin(yaw_) * e1_ + std::cos(yaw_) * e2_;
+    // pitch lifts it toward world up (0 = level with the target, + = above)
+    Eigen::Vector3f dir = std::cos(pitch_) * h + std::sin(pitch_) * world_up_;
+    return target_ + distance_ * dir;
 }
 
-Eigen::Matrix4f Camera::projection_matrix() const {
-    const auto& K = instrinsic_;
-    float n = 0.01f, f = 1000.0f;  // near far planes
-    Eigen::Matrix4f P = Eigen::Matrix4f::Zero();
-    P(0, 0) = 2 * K.fx / K.width;
-    P(1, 1) = 2 * K.fy / K.height;
-    P(0, 2) = 1 - 2 * K.cx / K.width;
-    P(1, 2) = 2 * K.cy / K.height - 1;
-    P(2, 2) = -(f + n) / (f - n);
-    P(2, 3) = -2 * f * n / (f - n);
-    P(3, 2) = -1.0f;
-    return P;
+void Camera::axes(Eigen::Vector3f& right, Eigen::Vector3f& down, Eigen::Vector3f& forward) const {
+    forward = (target_ - position()).normalized();
+    right = forward.cross(world_up_).normalized();
+    down = forward.cross(right);
 }
 
 Eigen::Matrix4f Camera::view_matrix() const {
-    // LookAt matrix
-    Eigen::Vector3f eye = position();
-    Eigen::Vector3f center = target_;
-    // Eigen::Vector3f up = kWorldUp;
+    Eigen::Vector3f right, down, forward;
+    axes(right, down, forward);
+    const Eigen::Vector3f eye = position();
 
-    Eigen::Vector3f forward = (center - eye).normalized();  // forward
-    // Eigen::Vector3f right = forward.cross(kWorldUp).normalized();  // right
-    // this is to match the up direction with COLMAP not using opengl convension (kWorldUp)
-    Eigen::Vector3f right =
-        forward.cross(Eigen::Vector3f(0.0f, -1.0f, 0.0f)).normalized();  // right
-    Eigen::Vector3f up = right.cross(forward);                           // up
-
+    // rows = camera axes in world coordinates (OpenCV: x right, y down, z forward). det = +1
     Eigen::Matrix4f view = Eigen::Matrix4f::Identity();
     view.block<1, 3>(0, 0) = right.transpose();
-    view.block<1, 3>(1, 0) = up.transpose();
+    view.block<1, 3>(1, 0) = down.transpose();
     view.block<1, 3>(2, 0) = forward.transpose();
     view.block<3, 1>(0, 3) = -view.block<3, 3>(0, 0) * eye;
     return view;
