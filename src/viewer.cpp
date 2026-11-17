@@ -15,8 +15,11 @@ Viewer::Viewer(const char* scene_path)
 }
 void Viewer::run() {
     Camera camera_;
-    camera_.set_target(Eigen::Vector3f(0.0f, 0.0f, 0.0f));
-    camera_.set_distance(5.0f);
+    // values for point_cloud.ply (counter scene), magic
+    camera_.set_world_up(Eigen::Vector3f(0.07f, -0.83f, -0.55f));
+    camera_.set_target(Eigen::Vector3f(0.43f, 1.48f, 1.49f));
+    camera_.set_distance(4.0f);
+    camera_.set_pitch(0.2f);
     Instrinsic intr;
     intr.fx = 800.0f;
     intr.fy = 800.0f;

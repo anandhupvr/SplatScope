@@ -26,12 +26,15 @@ __device__ inline float3 project_cov2d(const float* __restrict__ cov3d,
                                        float3 cam,
                                        const float* __restrict__ view,
                                        float fx,
-                                       float fy) {
+                                       float fy,
+                                       float lim_x,
+                                       float lim_y) {
     // compute jacobian
     float inv_z = 1.0f / cam.z;
     float inv_z2 = inv_z * inv_z;
-    // clamp the jacobina here 
-    // now its cover whole screen while zoon in, its growing with x/z !!!fix this
+    // linearize as if the Gaussian sat at most 1.3x outside the view edge (shape only)
+    const float tx = fminf(lim_x, fmaxf(-lim_x, cam.x * inv_z)) * cam.z;
+    const float ty = fminf(lim_y, fmaxf(-lim_y, cam.y * inv_z)) * cam.z;
 
     // padding row was padding(before this transpose)
     glm::mat3 J = glm::mat3(fx * inv_z,
@@ -40,8 +43,8 @@ __device__ inline float3 project_cov2d(const float* __restrict__ cov3d,
                             0.0f,
                             fy * inv_z,
                             0.0f,  // col 1
-                            -fx * cam.x * inv_z2,
-                            -fy * cam.y * inv_z2,
+                            -fx * tx * inv_z2,
+                            -fy * ty * inv_z2,
                             0.0f  // col 2
     );
 

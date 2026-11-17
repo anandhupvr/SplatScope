@@ -114,7 +114,10 @@ __global__ void project_gaussians(int N,
     float u = fx * cam.x * inv_z + cx;
     float v = fy * cam.y * inv_z + cy;
 
-    float3 cov2d = gmath::project_cov2d(d_cov3d + 6 * idx, cam, d_view, fx, fy);
+    // half the screen in x/z units is (W/2)/fx; 30% margin as in the reference rasterizer
+    const float lim_x = 1.3f * 0.5f * W / fx;
+    const float lim_y = 1.3f * 0.5f * H / fy;
+    float3 cov2d = gmath::project_cov2d(d_cov3d + 6 * idx, cam, d_view, fx, fy, lim_x, lim_y);
 
     // low-pass filter: ADD 0.3 px² (convolving two Gaussians adds covariances); also keeps it
     // invertible
