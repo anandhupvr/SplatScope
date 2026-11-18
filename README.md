@@ -1,11 +1,13 @@
 # SplatScope
-Minimal 3D Gaussian Splatting Viewer
 
-A CPU/GPU-based implementation of a 3D Gaussian Splatting viwer, building
-from scratch to understand the rendering pipeline introduced by
-Kerbl et al. (SIGGRAPH 2023). This is purely a learning project — the 
-focus is on the math behind projection, rasterization, and compositing, 
-not on performance or optimization
+A 3D Gaussian Splatting viewer written in C++ and CUDA.
 
+<p align="center">
+  <img src="assets/orbit.gif" alt="SplatScope orbiting the Mip-NeRF 360 counter scene" width="640">
+</p>
+
+SplatScope renders scenes trained with [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/)
+(Kerbl et al., SIGGRAPH 2023).
+It is a learning project contains:  Projection -> Prefix sum -> Duplicate -> Radix sort -> Tile ranges -> Blend
 
 
